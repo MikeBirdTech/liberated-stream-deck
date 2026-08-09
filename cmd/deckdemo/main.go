@@ -36,8 +36,11 @@ type demoDeck interface {
 	ReadEvents(time.Duration) (streamdeck.InputRead, error)
 	SetBrightness(int) error
 	SetKeyImage(int, image.Image) error
-	SetTouchStripImage(image.Image) error
 	Close() error
+}
+
+type touchStripDeck interface {
+	SetTouchStripImage(image.Image) error
 }
 
 type openDeckFunc func() (demoDeck, error)
@@ -56,7 +59,7 @@ func run() error {
 
 	state := demoState{brightness: 70}
 	return runDemo(ctx, &state, func() (demoDeck, error) {
-		return streamdeck.Open()
+		return streamdeck.OpenAny()
 	}, reconnectInterval)
 }
 
@@ -79,7 +82,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, retryInte
 
 		info, setupErr := deck.Info()
 		if setupErr == nil {
-			setupErr = restoreDemo(deck, state)
+			setupErr = restoreDemo(deck, state, info.Model)
 		}
 		if setupErr != nil {
 			log.Printf("device setup failed retry=%s error=%q", retryInterval, setupErr)
@@ -93,10 +96,15 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, retryInte
 			continue
 		}
 
-		log.Printf("device connected vid=%04x pid=%04x product=%q", info.VendorID, info.ProductID, info.Product)
-		log.Printf("output restored keys=1-8 strip=800x100 brightness=%d", state.brightness)
+		log.Printf("device connected vid=%04x pid=%04x product=%q model=%q", info.VendorID, info.ProductID, info.Product, info.Model)
+		if info.Model.HasTouchStrip() {
+			log.Printf("output restored keys=1-8 strip=800x100 brightness=%d", state.brightness)
+		} else {
+			width, height := info.Model.KeyImageSize()
+			log.Printf("output restored keys=1-%d key-size=%dx%d brightness=%d", info.Model.KeyCount(), width, height, state.brightness)
+		}
 
-		connectionErr := runConnected(ctx, deck, state)
+		connectionErr := runConnected(ctx, deck, state, info.Model)
 		closeErr := deck.Close()
 		if ctx.Err() != nil {
 			if closeErr != nil {
@@ -117,7 +125,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, retryInte
 	}
 }
 
-func runConnected(ctx context.Context, deck demoDeck, state *demoState) error {
+func runConnected(ctx context.Context, deck demoDeck, state *demoState, model streamdeck.Model) error {
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -132,7 +140,7 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState) error {
 		}
 		logInputDiagnostics(result)
 		for _, event := range result.Events {
-			if err := handleEvent(deck, state, event); err != nil {
+			if err := handleEvent(deck, state, model, event); err != nil {
 				return err
 			}
 		}
@@ -158,33 +166,47 @@ func waitForReconnect(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func restoreDemo(deck demoDeck, state *demoState) error {
+func restoreDemo(deck demoDeck, state *demoState, model streamdeck.Model) error {
 	if err := deck.SetBrightness(state.brightness); err != nil {
 		return fmt.Errorf("restore brightness: %w", err)
 	}
-	for index := range state.keys {
-		if err := renderKey(deck, state, index); err != nil {
+	for index := 0; index < model.KeyCount(); index++ {
+		if err := renderKey(deck, state, model, index); err != nil {
 			return err
 		}
 	}
-	if err := renderStrip(deck, state); err != nil {
+	if err := renderStrip(deck, state, model); err != nil {
 		return err
 	}
 	return nil
 }
 
-func handleEvent(deck demoDeck, state *demoState, event streamdeck.Event) error {
+func handleEvent(deck demoDeck, state *demoState, model streamdeck.Model, event streamdeck.Event) error {
 	switch event := event.(type) {
 	case streamdeck.KeyEvent:
+		if event.Key < 0 || event.Key >= model.KeyCount() {
+			return fmt.Errorf("key event index %d out of range for %s", event.Key, model)
+		}
 		log.Printf("input key key=%d pressed=%t", event.Key+1, event.Pressed)
 		state.latestInput = fmt.Sprintf("KEY %d %s", event.Key+1, pressedLabel(event.Pressed))
 		if event.Pressed {
 			state.keys[event.Key] = !state.keys[event.Key]
-			if err := renderKey(deck, state, event.Key); err != nil {
+			if err := renderKey(deck, state, model, event.Key); err != nil {
 				return err
 			}
+			if model == streamdeck.ModelMini && (event.Key == 4 || event.Key == 5) {
+				delta := -10
+				if event.Key == 5 {
+					delta = 10
+				}
+				state.brightness = clamp(state.brightness+delta, 0, 100)
+				if err := deck.SetBrightness(state.brightness); err != nil {
+					return err
+				}
+				log.Printf("output brightness=%d", state.brightness)
+			}
 		}
-		return renderStrip(deck, state)
+		return renderStrip(deck, state, model)
 
 	case streamdeck.DialRotateEvent:
 		log.Printf("input dial dial=%d delta=%+d", event.Dial+1, event.Delta)
@@ -204,23 +226,23 @@ func handleEvent(deck demoDeck, state *demoState, event streamdeck.Event) error 
 			previous := state.selectedKey
 			state.selectedKey = wrap(state.selectedKey+event.Delta, streamdeck.KeyCount)
 			if previous != state.selectedKey {
-				if err := renderKey(deck, state, previous); err != nil {
+				if err := renderKey(deck, state, model, previous); err != nil {
 					return err
 				}
-				if err := renderKey(deck, state, state.selectedKey); err != nil {
+				if err := renderKey(deck, state, model, state.selectedKey); err != nil {
 					return err
 				}
 			}
 		case 3:
 			state.mode = wrap(state.mode+event.Delta, len(displayModes))
 		}
-		return renderStrip(deck, state)
+		return renderStrip(deck, state, model)
 
 	case streamdeck.DialPressEvent:
 		log.Printf("input dial dial=%d pressed=%t", event.Dial+1, event.Pressed)
 		state.latestInput = fmt.Sprintf("D%d %s", event.Dial+1, pressedLabel(event.Pressed))
 		if !event.Pressed {
-			return renderStrip(deck, state)
+			return renderStrip(deck, state, model)
 		}
 		switch event.Dial {
 		case 0:
@@ -236,40 +258,48 @@ func handleEvent(deck demoDeck, state *demoState, event streamdeck.Event) error 
 			}
 		case 2:
 			state.keys[state.selectedKey] = !state.keys[state.selectedKey]
-			if err := renderKey(deck, state, state.selectedKey); err != nil {
+			if err := renderKey(deck, state, model, state.selectedKey); err != nil {
 				return err
 			}
 		case 3:
 			state.mode = 0
 		}
-		return renderStrip(deck, state)
+		return renderStrip(deck, state, model)
 
 	case streamdeck.TouchEvent:
 		logTouch(event)
 		state.latestInput = touchInputSummary(event)
 		state.latestTouch = &event
-		return renderStrip(deck, state)
+		return renderStrip(deck, state, model)
 
 	default:
 		return fmt.Errorf("unsupported normalized event %T", event)
 	}
 }
 
-func renderKey(deck demoDeck, state *demoState, index int) error {
-	img := render.Key(render.KeyView{Index: index, On: state.keys[index], Selected: index == state.selectedKey})
+func renderKey(deck demoDeck, state *demoState, model streamdeck.Model, index int) error {
+	width, height := model.KeyImageSize()
+	img := render.KeySize(render.KeyView{Index: index, On: state.keys[index], Selected: index == state.selectedKey}, width, height)
 	if err := deck.SetKeyImage(index, img); err != nil {
 		return fmt.Errorf("render key %d: %w", index+1, err)
 	}
 	return nil
 }
 
-func renderStrip(deck demoDeck, state *demoState) error {
+func renderStrip(deck demoDeck, state *demoState, model streamdeck.Model) error {
+	if !model.HasTouchStrip() {
+		return nil
+	}
+	stripDeck, ok := deck.(touchStripDeck)
+	if !ok {
+		return fmt.Errorf("%s device does not provide touch-strip output", model)
+	}
 	img := render.Strip(render.StripView{
 		Counter: state.counter, Brightness: state.brightness,
 		SelectedKey: state.selectedKey, SelectedOn: state.keys[state.selectedKey],
 		Mode: displayModes[state.mode], LastInput: state.latestInput, Touch: state.latestTouch,
 	})
-	if err := deck.SetTouchStripImage(img); err != nil {
+	if err := stripDeck.SetTouchStripImage(img); err != nil {
 		return fmt.Errorf("render touch strip: %w", err)
 	}
 	return nil

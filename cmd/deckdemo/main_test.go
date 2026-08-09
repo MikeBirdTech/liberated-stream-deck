@@ -25,7 +25,7 @@ func TestRestoreDemoRestoresCompleteState(t *testing.T) {
 	}
 	deck := newFakeDemoDeck()
 
-	if err := restoreDemo(deck, state); err != nil {
+	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
 		t.Fatalf("restoreDemo: %v", err)
 	}
 	if got := deck.brightnessCalls; len(got) != 1 || got[0] != 65 {
@@ -47,6 +47,56 @@ func TestRestoreDemoRestoresCompleteState(t *testing.T) {
 		Mode: displayModes[state.mode], LastInput: state.latestInput, Touch: state.latestTouch,
 	})
 	assertImagesEqual(t, deck.stripImages[0], wantStrip, "strip image")
+}
+
+func TestRestoreDemoMiniRestoresSixNativeSizeKeysWithoutStrip(t *testing.T) {
+	state := &demoState{
+		keys:        [streamdeck.KeyCount]bool{true, false, true, false, true, false},
+		brightness:  60,
+		selectedKey: 2,
+	}
+	deck := newFakeDemoDeck()
+
+	if err := restoreDemo(deck, state, streamdeck.ModelMini); err != nil {
+		t.Fatalf("restoreDemo: %v", err)
+	}
+	if len(deck.brightnessCalls) != 1 || deck.brightnessCalls[0] != 60 {
+		t.Fatalf("brightness calls = %v, want [60]", deck.brightnessCalls)
+	}
+	if len(deck.keyImages) != streamdeck.MiniKeyCount {
+		t.Fatalf("key images = %d, want %d", len(deck.keyImages), streamdeck.MiniKeyCount)
+	}
+	for index, img := range deck.keyImages {
+		if img.Bounds().Dx() != streamdeck.MiniKeyImageWidth || img.Bounds().Dy() != streamdeck.MiniKeyImageHeight {
+			t.Fatalf("key %d size = %v, want 80x80", index, img.Bounds().Size())
+		}
+	}
+	if len(deck.stripImages) != 0 {
+		t.Fatalf("strip images = %d, want none", len(deck.stripImages))
+	}
+}
+
+func TestMiniBrightnessKeysAdjustAndClampBrightness(t *testing.T) {
+	deck := newFakeDemoDeck()
+	state := &demoState{brightness: 5}
+	if err := handleEvent(deck, state, streamdeck.ModelMini, streamdeck.KeyEvent{Key: 4, Pressed: true}); err != nil {
+		t.Fatalf("handle decrease: %v", err)
+	}
+	if state.brightness != 0 {
+		t.Fatalf("brightness = %d, want 0", state.brightness)
+	}
+	if err := handleEvent(deck, state, streamdeck.ModelMini, streamdeck.KeyEvent{Key: 5, Pressed: true}); err != nil {
+		t.Fatalf("handle increase: %v", err)
+	}
+	if state.brightness != 10 {
+		t.Fatalf("brightness = %d, want 10", state.brightness)
+	}
+	if got := deck.brightnessCalls; len(got) != 2 || got[0] != 0 || got[1] != 10 {
+		t.Fatalf("brightness calls = %v, want [0 10]", got)
+	}
+	if len(deck.stripImages) != 0 {
+		t.Fatalf("strip images = %d, want none", len(deck.stripImages))
+	}
 }
 
 func TestRunDemoReconnectsAndRestoresState(t *testing.T) {
@@ -148,7 +198,7 @@ func newFakeDemoDeck() *fakeDemoDeck {
 
 func (d *fakeDemoDeck) Info() (streamdeck.DeviceInfo, error) {
 	return streamdeck.DeviceInfo{
-		VendorID: streamdeck.VendorID, ProductID: streamdeck.ProductID, Product: "Stream Deck +",
+		VendorID: streamdeck.VendorID, ProductID: streamdeck.ProductID, Model: streamdeck.ModelPlus, Product: "Stream Deck +",
 	}, nil
 }
 

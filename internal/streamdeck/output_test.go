@@ -81,7 +81,7 @@ func TestBuildKeyImageReportsRejectsInvalidInput(t *testing.T) {
 
 func TestSetKeyImageWritesCompleteReports(t *testing.T) {
 	fake := &fakeHIDDevice{}
-	deck := &Deck{device: fake}
+	deck := newPlus(fake)
 	img := image.NewNRGBA(image.Rect(0, 0, KeyImageWidth, KeyImageHeight))
 	if err := deck.SetKeyImage(0, img); err != nil {
 		t.Fatalf("SetKeyImage: %v", err)
@@ -98,7 +98,7 @@ func TestSetKeyImageWritesCompleteReports(t *testing.T) {
 
 func TestSetKeyImageRejectsShortWrite(t *testing.T) {
 	fake := &fakeHIDDevice{shortWrite: true}
-	deck := &Deck{device: fake}
+	deck := newPlus(fake)
 	img := image.NewNRGBA(image.Rect(0, 0, KeyImageWidth, KeyImageHeight))
 	if err := deck.SetKeyImage(0, img); err == nil {
 		t.Fatal("short HID write returned nil error")
@@ -145,7 +145,7 @@ func TestBuildTouchStripImageReports(t *testing.T) {
 
 func TestSetTouchStripImageWritesMultipleCompleteReports(t *testing.T) {
 	fake := &fakeHIDDevice{}
-	deck := &Deck{device: fake}
+	deck := newPlus(fake)
 	img := image.NewNRGBA(image.Rect(0, 0, TouchStripWidth, TouchStripHeight))
 	if err := deck.SetTouchStripImage(img); err != nil {
 		t.Fatalf("SetTouchStripImage: %v", err)
@@ -160,7 +160,7 @@ func TestSetTouchStripImageWritesMultipleCompleteReports(t *testing.T) {
 
 func TestSetTouchStripImageRejectsShortWrite(t *testing.T) {
 	fake := &fakeHIDDevice{shortWrite: true}
-	deck := &Deck{device: fake}
+	deck := newPlus(fake)
 	img := image.NewNRGBA(image.Rect(0, 0, TouchStripWidth, TouchStripHeight))
 	if err := deck.SetTouchStripImage(img); err == nil {
 		t.Fatal("short HID write returned nil error")
@@ -170,6 +170,10 @@ func TestSetTouchStripImageRejectsShortWrite(t *testing.T) {
 type fakeHIDDevice struct {
 	writes            [][]byte
 	featureReports    [][]byte
+	reads             [][]byte
+	readErr           error
+	info              *hid.DeviceInfo
+	infoErr           error
 	shortWrite        bool
 	shortFeatureWrite bool
 	closeCalls        int
@@ -183,8 +187,16 @@ func (f *fakeHIDDevice) SendFeatureReport(report []byte) (int, error) {
 	return len(report), nil
 }
 
-func (f *fakeHIDDevice) ReadWithTimeout([]byte, time.Duration) (int, error) {
-	return 0, errors.New("not implemented")
+func (f *fakeHIDDevice) ReadWithTimeout(report []byte, _ time.Duration) (int, error) {
+	if f.readErr != nil {
+		return 0, f.readErr
+	}
+	if len(f.reads) == 0 {
+		return 0, errors.New("not implemented")
+	}
+	n := copy(report, f.reads[0])
+	f.reads = f.reads[1:]
+	return n, nil
 }
 
 func (f *fakeHIDDevice) Write(report []byte) (int, error) {
@@ -196,7 +208,13 @@ func (f *fakeHIDDevice) Write(report []byte) (int, error) {
 }
 
 func (f *fakeHIDDevice) GetDeviceInfo() (*hid.DeviceInfo, error) {
-	return nil, errors.New("not implemented")
+	if f.infoErr != nil {
+		return nil, f.infoErr
+	}
+	if f.info == nil {
+		return nil, errors.New("not implemented")
+	}
+	return f.info, nil
 }
 
 func (f *fakeHIDDevice) Close() error {

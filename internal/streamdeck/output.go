@@ -42,30 +42,7 @@ func (d *Deck) SetTouchStripImage(img image.Image) error {
 }
 
 func (d *Deck) writeImageReports(name string, target int, reports [][]byte) error {
-	d.writeMu.Lock()
-	defer d.writeMu.Unlock()
-	d.deviceMu.RLock()
-	defer d.deviceMu.RUnlock()
-	if d.closed {
-		return ErrClosed
-	}
-	for chunkIndex, report := range reports {
-		n, err := d.device.Write(report)
-		if err != nil {
-			return fmt.Errorf("write %s %d image chunk %d: %w", name, target, chunkIndex, err)
-		}
-		if n != len(report) {
-			return fmt.Errorf(
-				"write %s %d image chunk %d: wrote %d bytes, want %d",
-				name,
-				target,
-				chunkIndex,
-				n,
-				len(report),
-			)
-		}
-	}
-	return nil
+	return d.handle.writeReports(name, target, reports)
 }
 
 func buildKeyImageReports(index int, encodedJPEG []byte) ([][]byte, error) {

@@ -2,7 +2,7 @@ package streamdeck
 
 import "fmt"
 
-// Event is a normalized physical input from the Stream Deck Plus.
+// Event is a normalized physical input from a supported Stream Deck.
 type Event interface {
 	isEvent()
 }

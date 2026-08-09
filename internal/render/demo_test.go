@@ -19,6 +19,18 @@ func TestKeyDimensionsAndSelectionBorder(t *testing.T) {
 	assertDemoColor(t, img.At(60, 60), keyOn, "on background")
 }
 
+func TestMiniKeyDimensionsAndLayout(t *testing.T) {
+	img := KeySize(KeyView{Index: 5, On: true, Selected: true}, streamdeck.MiniKeyImageWidth, streamdeck.MiniKeyImageHeight)
+	if got := img.Bounds().Dx(); got != streamdeck.MiniKeyImageWidth {
+		t.Fatalf("width = %d", got)
+	}
+	if got := img.Bounds().Dy(); got != streamdeck.MiniKeyImageHeight {
+		t.Fatalf("height = %d", got)
+	}
+	assertDemoColor(t, img.At(0, 0), selected, "selection border")
+	assertDemoColor(t, img.At(40, 40), keyOn, "on background")
+}
+
 func TestStripDimensions(t *testing.T) {
 	touch := streamdeck.TouchEvent{Kind: streamdeck.TouchFlick, StartX: 120, StartY: 50, EndX: 690, EndY: 48}
 	img := Strip(StripView{Counter: 3, Brightness: 70, SelectedKey: 3, Mode: "INPUT", Touch: &touch})

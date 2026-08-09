@@ -33,7 +33,12 @@ type KeyView struct {
 
 // Key draws a generated key label, state, and optional selection border.
 func Key(view KeyView) image.Image {
-	img := image.NewNRGBA(image.Rect(0, 0, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight))
+	return KeySize(view, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+}
+
+// KeySize draws a generated key at a model's native key dimensions.
+func KeySize(view KeyView, width, height int) image.Image {
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
 	background := keyOff
 	if view.On {
 		background = keyOn
@@ -44,16 +49,22 @@ func Key(view KeyView) image.Image {
 	borderWidth := 2
 	if view.Selected {
 		borderColor = selected
-		borderWidth = 5
+		borderWidth = min(5, max(3, width/20))
 	}
 	drawBorder(img, img.Bounds(), borderWidth, borderColor)
 
-	drawCenteredText(img, fmt.Sprintf("KEY %d", view.Index+1), 25, 2, white)
+	labelY := 25
+	stateY := 70
+	if height <= streamdeck.MiniKeyImageHeight {
+		labelY = 14
+		stateY = 48
+	}
+	drawCenteredText(img, fmt.Sprintf("KEY %d", view.Index+1), labelY, 2, white)
 	state := "OFF"
 	if view.On {
 		state = "ON"
 	}
-	drawCenteredText(img, state, 70, 2, white)
+	drawCenteredText(img, state, stateY, 2, white)
 	return img
 }
 

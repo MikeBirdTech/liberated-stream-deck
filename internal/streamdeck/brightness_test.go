@@ -37,7 +37,7 @@ func TestBuildBrightnessReportRejectsInvalidValues(t *testing.T) {
 
 func TestSetBrightnessSendsCompleteFeatureReport(t *testing.T) {
 	fake := &fakeHIDDevice{}
-	deck := &Deck{device: fake}
+	deck := newPlus(fake)
 	if err := deck.SetBrightness(70); err != nil {
 		t.Fatalf("SetBrightness: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestSetBrightnessSendsCompleteFeatureReport(t *testing.T) {
 
 func TestSetBrightnessRejectsShortFeatureWrite(t *testing.T) {
 	fake := &fakeHIDDevice{shortFeatureWrite: true}
-	deck := &Deck{device: fake}
+	deck := newPlus(fake)
 	if err := deck.SetBrightness(70); err == nil {
 		t.Fatal("short feature write returned nil error")
 	}

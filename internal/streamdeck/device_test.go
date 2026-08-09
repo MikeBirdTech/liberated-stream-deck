@@ -9,7 +9,7 @@ import (
 
 func TestCloseIsIdempotentAndOperationsReturnErrClosed(t *testing.T) {
 	fake := &fakeHIDDevice{}
-	deck := &Deck{device: fake}
+	deck := newPlus(fake)
 	if err := deck.Close(); err != nil {
 		t.Fatalf("first Close: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestCloseIsIdempotentAndOperationsReturnErrClosed(t *testing.T) {
 }
 
 func TestReadEventsRejectsNegativeTimeout(t *testing.T) {
-	deck := &Deck{device: &fakeHIDDevice{}}
+	deck := newPlus(&fakeHIDDevice{})
 	if _, err := deck.ReadEvents(-time.Millisecond); err == nil {
 		t.Fatal("negative timeout returned nil error")
 	}
