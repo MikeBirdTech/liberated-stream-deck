@@ -1,4 +1,4 @@
-module github.com/MikeBirdTech/liberated-stream-deck-plus
+module github.com/MikeBirdTech/liberated-stream-deck
 
 go 1.24.0
 

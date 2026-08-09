@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MikeBirdTech/liberated-stream-deck-plus/internal/streamdeck"
+	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
 )
 
 func TestFetchRemoteDemo(t *testing.T) {

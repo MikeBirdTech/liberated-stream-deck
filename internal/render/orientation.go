@@ -5,7 +5,7 @@ import (
 	"image/color"
 	"image/draw"
 
-	"github.com/MikeBirdTech/liberated-stream-deck-plus/internal/streamdeck"
+	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
 )
 
 var (

@@ -6,7 +6,7 @@ import (
 	"image/color"
 	"image/draw"
 
-	"github.com/MikeBirdTech/liberated-stream-deck-plus/internal/streamdeck"
+	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"

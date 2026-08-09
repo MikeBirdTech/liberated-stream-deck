@@ -165,8 +165,8 @@ HIDAPI's Linux hidraw backend and links `-ludev`; no build tags or separately
 installed HIDAPI library are needed. Build on the Pi with:
 
 ```bash
-git clone https://github.com/MikeBirdTech/liberated-stream-deck-plus.git
-cd liberated-stream-deck-plus
+git clone https://github.com/MikeBirdTech/liberated-stream-deck.git
+cd liberated-stream-deck
 CGO_ENABLED=1 go build ./...
 ```
 

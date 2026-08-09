@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MikeBirdTech/liberated-stream-deck-plus/internal/streamdeck"
+	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
 )
 
 const (

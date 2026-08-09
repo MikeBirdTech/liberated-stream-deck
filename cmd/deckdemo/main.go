@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/MikeBirdTech/liberated-stream-deck-plus/internal/render"
-	"github.com/MikeBirdTech/liberated-stream-deck-plus/internal/streamdeck"
+	"github.com/MikeBirdTech/liberated-stream-deck/internal/render"
+	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
 )
 
 const (
