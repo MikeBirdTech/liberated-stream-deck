@@ -7,26 +7,35 @@ import (
 	"image/jpeg"
 )
 
-const keyJPEGQuality = 90
+const imageJPEGQuality = 90
 
 func encodeKeyJPEG(img image.Image) ([]byte, error) {
+	return encodeExactJPEG("key", img, KeyImageWidth, KeyImageHeight)
+}
+
+func encodeTouchStripJPEG(img image.Image) ([]byte, error) {
+	return encodeExactJPEG("touch-strip", img, TouchStripWidth, TouchStripHeight)
+}
+
+func encodeExactJPEG(name string, img image.Image, width, height int) ([]byte, error) {
 	if img == nil {
-		return nil, fmt.Errorf("key image is nil")
+		return nil, fmt.Errorf("%s image is nil", name)
 	}
 	bounds := img.Bounds()
-	if bounds.Dx() != KeyImageWidth || bounds.Dy() != KeyImageHeight {
+	if bounds.Dx() != width || bounds.Dy() != height {
 		return nil, fmt.Errorf(
-			"key image is %dx%d, want %dx%d",
+			"%s image is %dx%d, want %dx%d",
+			name,
 			bounds.Dx(),
 			bounds.Dy(),
-			KeyImageWidth,
-			KeyImageHeight,
+			width,
+			height,
 		)
 	}
 
 	var encoded bytes.Buffer
-	if err := jpeg.Encode(&encoded, img, &jpeg.Options{Quality: keyJPEGQuality}); err != nil {
-		return nil, fmt.Errorf("encode key image as JPEG: %w", err)
+	if err := jpeg.Encode(&encoded, img, &jpeg.Options{Quality: imageJPEGQuality}); err != nil {
+		return nil, fmt.Errorf("encode %s image as JPEG: %w", name, err)
 	}
 	return encoded.Bytes(), nil
 }

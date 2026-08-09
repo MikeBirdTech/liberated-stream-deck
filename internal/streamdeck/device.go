@@ -15,6 +15,7 @@ var ErrTimeout = errors.New("streamdeck input read timeout")
 type hidDevice interface {
 	ReadWithTimeout([]byte, time.Duration) (int, error)
 	Write([]byte) (int, error)
+	SendFeatureReport([]byte) (int, error)
 	GetDeviceInfo() (*hid.DeviceInfo, error)
 	Close() error
 }
@@ -35,7 +36,7 @@ type DeviceInfo struct {
 // Deck is an open Stream Deck Plus HID handle.
 type Deck struct {
 	device  hidDevice
-	decoder keyDecoder
+	decoder inputDecoder
 	writeMu sync.Mutex
 	closeMu sync.Mutex
 	closed  bool
@@ -72,27 +73,23 @@ func (d *Deck) Info() (DeviceInfo, error) {
 	return deviceInfo(info), nil
 }
 
-// ReadKeyEvents performs one timed HID read and decodes key-state reports.
-// Reports for controls outside Milestones 0-3 are ignored.
-func (d *Deck) ReadKeyEvents(timeout time.Duration) (KeyRead, error) {
+// ReadEvents performs one timed HID read and normalizes one input report.
+func (d *Deck) ReadEvents(timeout time.Duration) (InputRead, error) {
 	report := make([]byte, inputReportSize)
 	n, err := d.device.ReadWithTimeout(report, timeout)
 	if err != nil {
 		if errors.Is(err, hid.ErrTimeout) {
-			return KeyRead{}, ErrTimeout
+			return InputRead{}, ErrTimeout
 		}
-		return KeyRead{}, fmt.Errorf("read Stream Deck Plus input: %w", err)
+		return InputRead{}, fmt.Errorf("read Stream Deck Plus input: %w", err)
 	}
 	if n <= 0 || n > len(report) {
-		return KeyRead{}, fmt.Errorf("invalid HID read length %d", n)
+		return InputRead{}, fmt.Errorf("invalid HID read length %d", n)
 	}
 
 	result, err := d.decoder.Decode(report[:n])
-	if errors.Is(err, errNotKeyReport) {
-		return KeyRead{}, nil
-	}
 	if err != nil {
-		return KeyRead{}, fmt.Errorf("decode Stream Deck Plus input: %w", err)
+		return InputRead{}, fmt.Errorf("decode Stream Deck Plus input report=% x: %w", meaningfulInputBytes(report[:n]), err)
 	}
 	return result, nil
 }

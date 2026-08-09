@@ -33,3 +33,25 @@ func TestEncodeKeyJPEGRejectsInvalidImages(t *testing.T) {
 		t.Fatal("wrong-size image returned nil error")
 	}
 }
+
+func TestEncodeTouchStripJPEG(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, TouchStripWidth, TouchStripHeight))
+	encoded, err := encodeTouchStripJPEG(img)
+	if err != nil {
+		t.Fatalf("encodeTouchStripJPEG: %v", err)
+	}
+	decoded, err := jpeg.Decode(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("decode encoded JPEG: %v", err)
+	}
+	if got := decoded.Bounds().Size(); got != (image.Point{X: TouchStripWidth, Y: TouchStripHeight}) {
+		t.Fatalf("decoded JPEG size = %v", got)
+	}
+}
+
+func TestEncodeTouchStripJPEGRejectsInvalidDimensions(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, TouchStripWidth, TouchStripHeight-1))
+	if _, err := encodeTouchStripJPEG(img); err == nil {
+		t.Fatal("wrong-size strip image returned nil error")
+	}
+}

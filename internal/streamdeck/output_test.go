@@ -105,9 +105,81 @@ func TestSetKeyImageRejectsShortWrite(t *testing.T) {
 	}
 }
 
+func TestBuildTouchStripImageReports(t *testing.T) {
+	jpegData := make([]byte, imageChunkSize*2+7)
+	jpegData[0] = 0xaa
+	jpegData[len(jpegData)-1] = 0xbb
+	reports, err := buildTouchStripImageReports(jpegData)
+	if err != nil {
+		t.Fatalf("buildTouchStripImageReports: %v", err)
+	}
+	if len(reports) != 3 {
+		t.Fatalf("reports = %d, want 3", len(reports))
+	}
+	for index, report := range reports {
+		if len(report) != outputReportSize {
+			t.Fatalf("report %d size = %d", index, len(report))
+		}
+		if report[0] != outputReportID || report[1] != commandUpdateTouchStrip || report[2] != 0 {
+			t.Fatalf("report %d header = % x", index, report[:3])
+		}
+		if got := binary.LittleEndian.Uint16(report[6:8]); got != uint16(index) {
+			t.Fatalf("report %d chunk index = %d", index, got)
+		}
+	}
+	if reports[0][3] != 0 || reports[1][3] != 0 || reports[2][3] != 1 {
+		t.Fatalf("final flags = %d,%d,%d", reports[0][3], reports[1][3], reports[2][3])
+	}
+	if got := binary.LittleEndian.Uint16(reports[2][4:6]); got != 7 {
+		t.Fatalf("last size = %d, want 7", got)
+	}
+	if reports[0][imageHeaderSize] != 0xaa || reports[2][imageHeaderSize+6] != 0xbb {
+		t.Fatal("strip payload boundaries not preserved")
+	}
+	for _, value := range reports[2][imageHeaderSize+7:] {
+		if value != 0 {
+			t.Fatal("last strip report padding is not zero-filled")
+		}
+	}
+}
+
+func TestSetTouchStripImageWritesMultipleCompleteReports(t *testing.T) {
+	fake := &fakeHIDDevice{}
+	deck := &Deck{device: fake}
+	img := image.NewNRGBA(image.Rect(0, 0, TouchStripWidth, TouchStripHeight))
+	if err := deck.SetTouchStripImage(img); err != nil {
+		t.Fatalf("SetTouchStripImage: %v", err)
+	}
+	if len(fake.writes) < 2 {
+		t.Fatalf("writes = %d, want multiple", len(fake.writes))
+	}
+	if fake.writes[len(fake.writes)-1][3] != 1 {
+		t.Fatal("last write does not have final marker")
+	}
+}
+
+func TestSetTouchStripImageRejectsShortWrite(t *testing.T) {
+	fake := &fakeHIDDevice{shortWrite: true}
+	deck := &Deck{device: fake}
+	img := image.NewNRGBA(image.Rect(0, 0, TouchStripWidth, TouchStripHeight))
+	if err := deck.SetTouchStripImage(img); err == nil {
+		t.Fatal("short HID write returned nil error")
+	}
+}
+
 type fakeHIDDevice struct {
-	writes     [][]byte
-	shortWrite bool
+	writes            [][]byte
+	featureReports    [][]byte
+	shortWrite        bool
+	shortFeatureWrite bool
+}
+
+func (f *fakeHIDDevice) SendFeatureReport(report []byte) (int, error) {
+	f.featureReports = append(f.featureReports, append([]byte(nil), report...))
+	if f.shortFeatureWrite {
+		return len(report) - 1, nil
+	}
+	return len(report), nil
 }
 
 func (f *fakeHIDDevice) ReadWithTimeout([]byte, time.Duration) (int, error) {
