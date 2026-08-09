@@ -125,7 +125,7 @@ func TestRunDemoReconnectsAndRestoresState(t *testing.T) {
 		mode:        1,
 	}
 
-	if err := runDemo(ctx, state, open, time.Millisecond); err != nil {
+	if err := runDemo(ctx, state, open, testRemoteDemo(state.brightness), time.Millisecond); err != nil {
 		t.Fatalf("runDemo: %v", err)
 	}
 	if openCalls != 2 {
@@ -158,7 +158,7 @@ func TestRunDemoCancellationInterruptsReconnectWait(t *testing.T) {
 	}
 
 	go func() {
-		done <- runDemo(ctx, &demoState{brightness: 70}, open, time.Hour)
+		done <- runDemo(ctx, &demoState{brightness: 70}, open, testRemoteDemo(70), time.Hour)
 	}()
 
 	select {
@@ -174,6 +174,14 @@ func TestRunDemoCancellationInterruptsReconnectWait(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runDemo did not stop after cancellation")
+	}
+}
+
+func testRemoteDemo(brightness int) fetchDemoFunc {
+	return func(context.Context) (remoteDemo, error) {
+		demo := remoteDemo{Command: "run_hardware_demo"}
+		demo.Presentation.Brightness = brightness
+		return demo, nil
 	}
 }
 

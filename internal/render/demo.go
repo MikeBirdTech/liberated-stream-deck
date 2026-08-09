@@ -22,6 +22,12 @@ var (
 	tapColor       = color.NRGBA{R: 45, G: 205, B: 255, A: 255}
 	pressColor     = color.NRGBA{R: 255, G: 96, B: 180, A: 255}
 	flickColor     = color.NRGBA{R: 164, G: 112, B: 255, A: 255}
+	paperGarden    = color.NRGBA{R: 0xf6, G: 0xf5, B: 0xee, A: 255}
+	paperInk       = color.NRGBA{R: 0x27, G: 0x2c, B: 0x24, A: 255}
+	paperMoss      = color.NRGBA{R: 0x55, G: 0x76, B: 0x4a, A: 255}
+	paperLeaf      = color.NRGBA{R: 0x6f, G: 0xa2, B: 0x5c, A: 255}
+	paperAmber     = color.NRGBA{R: 0xa0, G: 0x6d, B: 0x0c, A: 255}
+	paperRust      = color.NRGBA{R: 0xac, G: 0x4c, B: 0x37, A: 255}
 )
 
 // KeyView is the complete state needed to draw one demo key.
@@ -77,11 +83,20 @@ type StripView struct {
 	Mode        string
 	LastInput   string
 	Touch       *streamdeck.TouchEvent
+	Theme       string
+	Title       string
+	Message     string
+	EventsSeen  int
+	LastEvent   string
 }
 
 // Strip draws the complete 800x100 diagnostic window image.
 func Strip(view StripView) image.Image {
 	img := image.NewNRGBA(image.Rect(0, 0, streamdeck.TouchStripWidth, streamdeck.TouchStripHeight))
+	if view.Theme == "paper" {
+		drawPaperGarden(img, view)
+		return img
+	}
 	fill(img, img.Bounds(), demoBackground)
 
 	switch view.Mode {
@@ -94,6 +109,40 @@ func Strip(view StripView) image.Image {
 	}
 
 	return img
+}
+
+func drawPaperGarden(dst draw.Image, view StripView) {
+	fill(dst, dst.Bounds(), paperGarden)
+	fill(dst, image.Rect(0, 0, 7, streamdeck.TouchStripHeight), paperMoss)
+	fill(dst, image.Rect(405, 12, 407, 88), paperLeaf)
+	fill(dst, image.Rect(18, 84, 373, 87), paperLeaf)
+
+	title := view.Title
+	if title == "" {
+		title = "Demo Garden"
+	}
+	message := view.Message
+	if message == "" {
+		message = "Demo link established"
+	}
+	drawText(dst, title, 20, 10, 2, paperMoss)
+	drawText(dst, message, 20, 43, textScale(message, 25), paperInk)
+
+	count := fmt.Sprintf("%d events received", view.EventsSeen)
+	drawText(dst, count, 433, 12, textScale(count, 24), paperAmber)
+	last := view.LastEvent
+	if last == "" {
+		last = "Waiting for input"
+	}
+	last = "Last: " + last
+	drawText(dst, last, 433, 51, textScale(last, 25), paperRust)
+}
+
+func textScale(text string, scaleTwoLimit int) int {
+	if len(text) > scaleTwoLimit {
+		return 1
+	}
+	return 2
 }
 
 func drawInputOverview(dst draw.Image, view StripView) {

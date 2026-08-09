@@ -29,6 +29,12 @@ type demoState struct {
 	mode        int
 	latestInput string
 	latestTouch *streamdeck.TouchEvent
+
+	remoteTheme      string
+	remoteTitle      string
+	remoteMessage    string
+	remoteEventsSeen int
+	remoteLast       string
 }
 
 type demoDeck interface {
@@ -44,6 +50,7 @@ type touchStripDeck interface {
 }
 
 type openDeckFunc func() (demoDeck, error)
+type fetchDemoFunc func(context.Context) (remoteDemo, error)
 
 func main() {
 	log.SetFlags(0)
@@ -58,12 +65,18 @@ func run() error {
 	defer stop()
 
 	state := demoState{brightness: 70}
-	return runDemo(ctx, &state, func() (demoDeck, error) {
-		return streamdeck.OpenAny()
-	}, reconnectInterval)
+	return runDemo(
+		ctx,
+		&state,
+		func() (demoDeck, error) { return streamdeck.OpenAny() },
+		func(ctx context.Context) (remoteDemo, error) {
+			return fetchRemoteDemo(ctx, demoHTTPClient, demoEndpointURL)
+		},
+		reconnectInterval,
+	)
 }
 
-func runDemo(ctx context.Context, state *demoState, open openDeckFunc, retryInterval time.Duration) error {
+func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo fetchDemoFunc, retryInterval time.Duration) error {
 	for {
 		if ctx.Err() != nil {
 			log.Print("device shutdown reason=interrupt")
@@ -81,6 +94,13 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, retryInte
 		}
 
 		info, setupErr := deck.Info()
+		var remote remoteDemo
+		if setupErr == nil {
+			remote, setupErr = fetchDemo(ctx)
+		}
+		if setupErr == nil {
+			setupErr = applyRemoteDemo(state, remote)
+		}
 		if setupErr == nil {
 			setupErr = restoreDemo(deck, state, info.Model)
 		}
@@ -96,6 +116,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, retryInte
 			continue
 		}
 
+		log.Printf("demo endpoint connected revision=%d theme=%q events_seen=%d", remote.Revision, remote.Presentation.Theme, remote.EventsSeen)
 		log.Printf("device connected vid=%04x pid=%04x product=%q model=%q", info.VendorID, info.ProductID, info.Product, info.Model)
 		if info.Model.HasTouchStrip() {
 			log.Printf("output restored keys=1-8 strip=800x100 brightness=%d", state.brightness)
@@ -126,9 +147,27 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, retryInte
 }
 
 func runConnected(ctx context.Context, deck demoDeck, state *demoState, model streamdeck.Model) error {
+	connectionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	eventResults := make(chan eventPostResult, 64)
+
 	for {
 		if ctx.Err() != nil {
 			return nil
+		}
+		select {
+		case result := <-eventResults:
+			if result.err != nil {
+				log.Printf("demo event error=%q", result.err)
+				continue
+			}
+			state.remoteEventsSeen = result.ack.EventsSeen
+			state.remoteLast = lastEventMessage(result.ack.Message)
+			log.Printf("demo ack events_seen=%d message=%q", result.ack.EventsSeen, result.ack.Message)
+			if err := renderStrip(deck, state, model); err != nil {
+				return err
+			}
+		default:
 		}
 
 		result, err := deck.ReadEvents(inputReadTimeout)
@@ -142,6 +181,9 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 		for _, event := range result.Events {
 			if err := handleEvent(deck, state, model, event); err != nil {
 				return err
+			}
+			if payload, ok := remoteEvent(event); ok {
+				postEventAsync(connectionCtx, payload, eventResults)
 			}
 		}
 	}
@@ -177,6 +219,22 @@ func restoreDemo(deck demoDeck, state *demoState, model streamdeck.Model) error 
 	}
 	if err := renderStrip(deck, state, model); err != nil {
 		return err
+	}
+	return nil
+}
+
+func applyRemoteDemo(state *demoState, demo remoteDemo) error {
+	if demo.Command != "run_hardware_demo" {
+		return fmt.Errorf("unsupported remote demo command %q", demo.Command)
+	}
+	state.brightness = demo.Presentation.Brightness
+	state.remoteTheme = demo.Presentation.Theme
+	state.remoteTitle = demo.Presentation.Title
+	state.remoteMessage = demo.Presentation.Message
+	state.remoteEventsSeen = demo.EventsSeen
+	state.remoteLast = ""
+	if demo.LastEvent != nil {
+		state.remoteLast = lastEventMessage(demo.LastEvent.Summary)
 	}
 	return nil
 }
@@ -298,6 +356,8 @@ func renderStrip(deck demoDeck, state *demoState, model streamdeck.Model) error 
 		Counter: state.counter, Brightness: state.brightness,
 		SelectedKey: state.selectedKey, SelectedOn: state.keys[state.selectedKey],
 		Mode: displayModes[state.mode], LastInput: state.latestInput, Touch: state.latestTouch,
+		Theme: state.remoteTheme, Title: state.remoteTitle, Message: state.remoteMessage,
+		EventsSeen: state.remoteEventsSeen, LastEvent: state.remoteLast,
 	})
 	if err := stripDeck.SetTouchStripImage(img); err != nil {
 		return fmt.Errorf("render touch strip: %w", err)

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"image"
 	"image/color"
 	"testing"
 
@@ -40,6 +41,40 @@ func TestStripDimensions(t *testing.T) {
 	if got := img.Bounds().Dy(); got != streamdeck.TouchStripHeight {
 		t.Fatalf("height = %d", got)
 	}
+}
+
+func TestPaperGardenStripUsesPalette(t *testing.T) {
+	img := Strip(StripView{
+		Theme: "paper", Title: "Demo Garden", Message: "Demo link established",
+		EventsSeen: 17, LastEvent: "Dial 2 +3",
+	})
+	if got := img.Bounds().Size(); got.X != streamdeck.TouchStripWidth || got.Y != streamdeck.TouchStripHeight {
+		t.Fatalf("size = %v", got)
+	}
+	assertDemoColor(t, img.At(0, 0), paperMoss, "moss rail")
+	assertDemoColor(t, img.At(10, 0), paperGarden, "paper background")
+	assertDemoColor(t, img.At(406, 20), paperLeaf, "leaf divider")
+
+	wantColors := []color.NRGBA{paperInk, paperMoss, paperLeaf, paperAmber, paperRust}
+	for _, want := range wantColors {
+		if !imageContainsColor(img, want) {
+			t.Fatalf("strip does not contain palette color %#v", want)
+		}
+	}
+	if imageContainsColor(img, flickColor) {
+		t.Fatal("paper strip contains purple")
+	}
+}
+
+func imageContainsColor(img image.Image, want color.NRGBA) bool {
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			if color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA) == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func assertDemoColor(t *testing.T, got color.Color, want color.NRGBA, location string) {
