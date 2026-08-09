@@ -70,10 +70,10 @@ func TestBuildMiniKeyImageReportsRejectsBounds(t *testing.T) {
 	}
 }
 
-func TestEncodeMiniKeyBMPDimensionsAndClockwiseRotation(t *testing.T) {
+func TestEncodeMiniKeyBMPDimensionsAndPhysicalRotation(t *testing.T) {
 	img := image.NewNRGBA(image.Rect(0, 0, MiniKeyImageWidth, MiniKeyImageHeight))
 	red := color.NRGBA{R: 255, A: 255}
-	img.Set(0, 0, red)
+	img.Set(0, 1, red)
 
 	encoded, err := encodeMiniKeyBMP(img)
 	if err != nil {
@@ -95,9 +95,9 @@ func TestEncodeMiniKeyBMPDimensionsAndClockwiseRotation(t *testing.T) {
 	if got := decoded.Bounds().Size(); got != (image.Point{X: MiniKeyImageHeight, Y: MiniKeyImageWidth}) {
 		t.Fatalf("decoded size = %v", got)
 	}
-	got := color.NRGBAModel.Convert(decoded.At(MiniKeyImageHeight-1, 0)).(color.NRGBA)
+	got := color.NRGBAModel.Convert(decoded.At(1, 0)).(color.NRGBA)
 	if got.R < 250 || got.G != 0 || got.B != 0 {
-		t.Fatalf("rotated top-right pixel = %#v, want red", got)
+		t.Fatalf("transposed pixel = %#v, want red", got)
 	}
 }
 

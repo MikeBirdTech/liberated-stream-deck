@@ -28,7 +28,9 @@ func encodeMiniKeyBMP(img image.Image) ([]byte, error) {
 	for y := 0; y < bounds.Dy(); y++ {
 		for x := 0; x < bounds.Dx(); x++ {
 			r, g, b, _ := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
-			rotated.SetRGBA(bounds.Dy()-1-y, x, color.RGBA{
+			// Match the Mini reference transform: rotate, vertically flip,
+			// then let the BMP encoder store rows bottom-up.
+			rotated.SetRGBA(y, x, color.RGBA{
 				R: byte(r >> 8), G: byte(g >> 8), B: byte(b >> 8), A: 0xff,
 			})
 		}
