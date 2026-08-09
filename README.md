@@ -159,11 +159,3 @@ is not presented as a universal Stream Deck framework. Support for other
 models or platforms, plugin systems, configurable UI frameworks, installers,
 menu-bar packaging, partial strip updates, the full 800x480 LCD command, and
 animation systems are outside the current scope.
-
-## License
-
-There is currently no license file. That is a blocker to publishing this as an
-open-source repository because others do not yet have explicit permission to
-use, modify, or redistribute it. A permissive license such as MIT is a good fit
-for this project, but the repository owner must make and record that choice
-before publication.
