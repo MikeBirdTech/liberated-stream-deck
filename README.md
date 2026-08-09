@@ -7,11 +7,10 @@ replacement is needed.
 
 ## Status
 
-Stream Deck Plus support remains physically verified on Apple Silicon macOS.
-Original Stream Deck Mini support and Linux/arm64 enablement are code-complete;
-physical verification on the Mini is still pending. See the
-[manual test plan](docs/manual-test-plan.md) for the exact remaining hardware
-checks.
+Stream Deck Plus and Original Stream Deck Mini support are physically verified
+on Apple Silicon macOS. Linux/arm64 enablement is code-complete; Raspberry Pi
+hardware verification is still pending. See the [manual test
+plan](docs/manual-test-plan.md) for the exact remaining hardware checks.
 
 ## Support matrix
 
@@ -19,7 +18,7 @@ checks.
 | --- | --- | --- | --- | --- |
 | Stream Deck Plus | `0x0084` | Apple Silicon macOS | Complete | Verified |
 | Stream Deck Plus | `0x0084` | Linux/arm64, including Raspberry Pi | Expected to work through the same hidraw backend | Not tested |
-| Original Stream Deck Mini | `0x0063` | Apple Silicon macOS | Complete | Pending |
+| Original Stream Deck Mini | `0x0063` | Apple Silicon macOS | Complete | Verified |
 | Original Stream Deck Mini | `0x0063` | Linux/arm64, including Raspberry Pi | Complete | Pending |
 
 All supported devices use Elgato vendor ID `0x0FD9`. The 2022 Mini uses PID
