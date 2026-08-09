@@ -62,7 +62,9 @@ type StripView struct {
 	Counter     int
 	Brightness  int
 	SelectedKey int
+	SelectedOn  bool
 	Mode        string
+	LastInput   string
 	Touch       *streamdeck.TouchEvent
 }
 
@@ -71,46 +73,95 @@ func Strip(view StripView) image.Image {
 	img := image.NewNRGBA(image.Rect(0, 0, streamdeck.TouchStripWidth, streamdeck.TouchStripHeight))
 	fill(img, img.Bounds(), demoBackground)
 
-	if view.Touch != nil {
-		drawTouch(img, *view.Touch)
+	switch view.Mode {
+	case "KEY TEST":
+		drawKeyTest(img, view)
+	case "TOUCH TEST":
+		drawTouchTest(img, view.Touch)
+	default:
+		drawInputOverview(img, view)
 	}
-
-	for _, x := range []int{130, 260, 390, 520} {
-		fill(img, image.Rect(x, 0, x+1, streamdeck.TouchStripHeight), divider)
-	}
-
-	drawText(img, "D1 COUNTER", 10, 7, 1, muted)
-	drawText(img, fmt.Sprintf("%+04d", view.Counter), 10, 35, 2, white)
-	drawText(img, "D2 BRIGHT", 140, 7, 1, muted)
-	drawText(img, fmt.Sprintf("%d%%", view.Brightness), 140, 35, 2, white)
-	drawText(img, "D3 SELECT", 270, 7, 1, muted)
-	drawText(img, fmt.Sprintf("KEY %d", view.SelectedKey+1), 270, 35, 2, white)
-	drawText(img, "D4 MODE", 400, 7, 1, muted)
-	drawText(img, view.Mode, 400, 35, modeScale(view.Mode), white)
-	drawText(img, touchSummary(view.Touch), 530, 7, 1, white)
 
 	return img
 }
 
-func modeScale(mode string) int {
-	if len(mode) > 7 {
-		return 1
+func drawInputOverview(dst draw.Image, view StripView) {
+	fill(dst, image.Rect(385, 0, 387, streamdeck.TouchStripHeight), divider)
+	fill(dst, image.Rect(0, 50, streamdeck.TouchStripWidth, 52), divider)
+	drawText(dst, fmt.Sprintf("D1 %+03d", view.Counter), 15, 8, 3, white)
+	drawText(dst, fmt.Sprintf("BRIGHT %d%%", view.Brightness), 415, 12, 2, white)
+	drawText(dst, fmt.Sprintf("KEY %d", view.SelectedKey+1), 15, 59, 3, white)
+
+	lastInput := view.LastInput
+	if lastInput == "" {
+		lastInput = "WAITING FOR INPUT"
 	}
-	return 2
+	scale := 2
+	if len(lastInput) > 25 {
+		scale = 1
+	}
+	drawText(dst, lastInput, 415, 61, scale, touchTextColor(view.Touch))
+	drawText(dst, "INPUT", 750, 2, 1, muted)
 }
 
-func touchSummary(event *streamdeck.TouchEvent) string {
-	if event == nil {
-		return "TOUCH: NONE"
+func drawKeyTest(dst draw.Image, view StripView) {
+	state := "OFF"
+	stateColor := muted
+	if view.SelectedOn {
+		state = "ON"
+		stateColor = keyOn
 	}
+	label := fmt.Sprintf("KEY %d", view.SelectedKey+1)
+	drawText(dst, label, centeredTextX(dst.Bounds().Dx(), label, 4), 8, 4, selected)
+	drawText(dst, state, centeredTextX(dst.Bounds().Dx(), state, 3), 55, 3, stateColor)
+	drawText(dst, "TURN D3 TO SELECT  PRESS D3 TO TOGGLE", 10, 84, 1, muted)
+	drawText(dst, "KEY TEST", 734, 2, 1, muted)
+}
+
+func drawTouchTest(dst draw.Image, event *streamdeck.TouchEvent) {
+	if event == nil {
+		drawText(dst, "TOUCH TEST", centeredTextX(dst.Bounds().Dx(), "TOUCH TEST", 3), 9, 3, white)
+		drawText(dst, "TAP, PRESS, OR FLICK", centeredTextX(dst.Bounds().Dx(), "TAP, PRESS, OR FLICK", 2), 59, 2, muted)
+		return
+	}
+
+	drawTouch(dst, *event)
 	switch event.Kind {
 	case streamdeck.TouchTap, streamdeck.TouchPress:
-		return fmt.Sprintf("%s %d,%d", event.Kind, event.X, event.Y)
+		kind := event.Kind.String()
+		coordinates := fmt.Sprintf("x=%d  y=%d", event.X, event.Y)
+		drawText(dst, kind, 20, 7, 4, touchTextColor(event))
+		drawText(dst, coordinates, 260, 19, 3, white)
 	case streamdeck.TouchFlick:
-		return fmt.Sprintf("FLICK %d,%d -> %d,%d", event.StartX, event.StartY, event.EndX, event.EndY)
-	default:
-		return "TOUCH: UNKNOWN"
+		direction := "->"
+		if event.EndX < event.StartX {
+			direction = "<-"
+		}
+		drawText(dst, "FLICK "+direction, 20, 7, 3, flickColor)
+		coordinates := fmt.Sprintf("%d,%d -> %d,%d", event.StartX, event.StartY, event.EndX, event.EndY)
+		drawText(dst, coordinates, 20, 58, 2, white)
 	}
+	drawText(dst, "TOUCH TEST", 720, 84, 1, muted)
+}
+
+func touchTextColor(event *streamdeck.TouchEvent) color.Color {
+	if event == nil {
+		return white
+	}
+	switch event.Kind {
+	case streamdeck.TouchTap:
+		return tapColor
+	case streamdeck.TouchPress:
+		return pressColor
+	case streamdeck.TouchFlick:
+		return flickColor
+	default:
+		return white
+	}
+}
+
+func centeredTextX(width int, text string, scale int) int {
+	return (width - font.MeasureString(basicfont.Face7x13, text).Ceil()*scale) / 2
 }
 
 func drawTouch(dst draw.Image, event streamdeck.TouchEvent) {

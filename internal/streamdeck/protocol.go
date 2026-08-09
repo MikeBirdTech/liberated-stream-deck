@@ -7,14 +7,22 @@ import (
 )
 
 const (
-	VendorID  uint16 = 0x0fd9
+	// VendorID is Elgato's USB vendor ID.
+	VendorID uint16 = 0x0fd9
+	// ProductID is the USB product ID for Stream Deck Plus.
 	ProductID uint16 = 0x0084
 
-	KeyCount         = 8
-	KeyImageWidth    = 120
-	KeyImageHeight   = 120
-	DialCount        = 4
-	TouchStripWidth  = 800
+	// KeyCount is the number of LCD keys on Stream Deck Plus.
+	KeyCount = 8
+	// KeyImageWidth is the required LCD key image width in pixels.
+	KeyImageWidth = 120
+	// KeyImageHeight is the required LCD key image height in pixels.
+	KeyImageHeight = 120
+	// DialCount is the number of rotary encoders on Stream Deck Plus.
+	DialCount = 4
+	// TouchStripWidth is the full touch-strip image width in pixels.
+	TouchStripWidth = 800
+	// TouchStripHeight is the full touch-strip image height in pixels.
 	TouchStripHeight = 100
 
 	inputReportSize   = 512

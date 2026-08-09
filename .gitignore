@@ -1,0 +1,18 @@
+# macOS metadata
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Local build and test output
+/bin/
+/dist/
+/deckdemo
+*.test
+coverage.out
+
+# Temporary diagnostics
+*.log
+*.tmp

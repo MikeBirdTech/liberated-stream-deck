@@ -15,18 +15,6 @@ type KeyEvent struct {
 
 func (KeyEvent) isEvent() {}
 
-// KeySnapshot is the baseline state established by the first valid key report.
-type KeySnapshot struct {
-	Pressed [KeyCount]bool
-}
-
-// KeyRead contains either an initial baseline or subsequent key transitions.
-// The first valid key report never produces transitions.
-type KeyRead struct {
-	Baseline *KeySnapshot
-	Events   []KeyEvent
-}
-
 // DialPressEvent is a rotary encoder button transition. Dial is zero-based.
 type DialPressEvent struct {
 	Dial    int
@@ -44,18 +32,15 @@ type DialRotateEvent struct {
 
 func (DialRotateEvent) isEvent() {}
 
-// DialButtonSnapshot is the baseline established by the first valid encoder
-// button report.
-type DialButtonSnapshot struct {
-	Pressed [DialCount]bool
-}
-
 // TouchKind identifies one of the three interactions emitted by the device.
 type TouchKind int
 
 const (
+	// TouchTap is a short touch-strip tap.
 	TouchTap TouchKind = iota
+	// TouchPress is a sustained touch-strip press.
 	TouchPress
+	// TouchFlick is a directional touch-strip gesture.
 	TouchFlick
 )
 
@@ -90,8 +75,6 @@ func (TouchEvent) isEvent() {}
 
 // InputRead is the normalized result of one HID input report.
 type InputRead struct {
-	KeyBaseline  *KeySnapshot
-	DialBaseline *DialButtonSnapshot
-	Events       []Event
-	Diagnostics  []string
+	Events      []Event
+	Diagnostics []string
 }

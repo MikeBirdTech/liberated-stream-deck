@@ -7,50 +7,37 @@ import (
 	"testing"
 )
 
-func TestKeyDecoderUsesFirstValidReportAsBaseline(t *testing.T) {
+func TestKeyDecoderEmitsFirstPressAndFollowingRelease(t *testing.T) {
 	var decoder keyDecoder
-	baselineReport := keyReport(t, true, false, false, false, false, false, false, false)
 
-	result, err := decoder.Decode(baselineReport)
+	events, err := decoder.Decode(keyReport(t, true, false, false, false, false, false, false, false))
 	if err != nil {
-		t.Fatalf("Decode baseline: %v", err)
+		t.Fatalf("Decode first press: %v", err)
 	}
-	if result.Baseline == nil {
-		t.Fatal("baseline is nil")
-	}
-	if !result.Baseline.Pressed[0] {
-		t.Fatal("baseline did not retain key 1 pressed state")
-	}
-	if len(result.Events) != 0 {
-		t.Fatalf("baseline emitted %d transition events, want 0", len(result.Events))
-	}
+	assertKeyEvents(t, events, KeyEvent{Key: 0, Pressed: true})
 
-	result, err = decoder.Decode(keyReport(t, false, false, false, false, false, false, false, false))
+	events, err = decoder.Decode(keyReport(t, false, false, false, false, false, false, false, false))
 	if err != nil {
 		t.Fatalf("Decode release: %v", err)
 	}
-	assertKeyEvents(t, result.Events, KeyEvent{Key: 0, Pressed: false})
+	assertKeyEvents(t, events, KeyEvent{Key: 0, Pressed: false})
 
-	result, err = decoder.Decode(keyReport(t, true, false, false, false, false, false, false, false))
+	events, err = decoder.Decode(keyReport(t, false, false, false, false, false, false, false, false))
 	if err != nil {
-		t.Fatalf("Decode press: %v", err)
+		t.Fatalf("Decode duplicate release: %v", err)
 	}
-	assertKeyEvents(t, result.Events, KeyEvent{Key: 0, Pressed: true})
+	assertKeyEvents(t, events)
 }
 
 func TestKeyDecoderEmitsEveryChangedKey(t *testing.T) {
 	var decoder keyDecoder
-	if _, err := decoder.Decode(keyReport(t, false, false, false, false, false, false, false, false)); err != nil {
-		t.Fatalf("Decode baseline: %v", err)
-	}
-
 	result, err := decoder.Decode(keyReport(t, true, false, false, false, false, false, false, true))
 	if err != nil {
 		t.Fatalf("Decode changes: %v", err)
 	}
 	assertKeyEvents(
 		t,
-		result.Events,
+		result,
 		KeyEvent{Key: 0, Pressed: true},
 		KeyEvent{Key: 7, Pressed: true},
 	)
@@ -59,17 +46,13 @@ func TestKeyDecoderEmitsEveryChangedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode unchanged snapshot: %v", err)
 	}
-	if len(result.Events) != 0 {
-		t.Fatalf("unchanged snapshot emitted %d events", len(result.Events))
+	if len(result) != 0 {
+		t.Fatalf("unchanged snapshot emitted %d events", len(result))
 	}
 }
 
 func TestInputDecoderMapsAllKeyIndexes(t *testing.T) {
 	var decoder inputDecoder
-	if _, err := decoder.Decode(keyReport(t, false, false, false, false, false, false, false, false)); err != nil {
-		t.Fatalf("Decode baseline: %v", err)
-	}
-
 	for key := 0; key < KeyCount; key++ {
 		states := make([]bool, KeyCount)
 		states[key] = true
@@ -87,33 +70,25 @@ func TestInputDecoderMapsAllKeyIndexes(t *testing.T) {
 	}
 }
 
-func TestDialButtonDecoderUsesFirstValidReportAsBaseline(t *testing.T) {
+func TestDialButtonDecoderEmitsFirstPressAndFollowingRelease(t *testing.T) {
 	var decoder inputDecoder
 	result, err := decoder.Decode(encoderButtonReport(true, false, false, false))
 	if err != nil {
-		t.Fatalf("Decode baseline: %v", err)
+		t.Fatalf("Decode first press: %v", err)
 	}
-	if result.DialBaseline == nil || !result.DialBaseline.Pressed[0] {
-		t.Fatalf("dial baseline = %+v", result.DialBaseline)
-	}
-	if len(result.Events) != 0 {
-		t.Fatalf("baseline events = %v, want none", result.Events)
-	}
-
-	result, err = decoder.Decode(encoderButtonReport(false, false, false, true))
-	if err != nil {
-		t.Fatalf("Decode transitions: %v", err)
-	}
-	assertInputEvents(t, result.Events,
-		DialPressEvent{Dial: 0, Pressed: false},
-		DialPressEvent{Dial: 3, Pressed: true},
-	)
+	assertInputEvents(t, result.Events, DialPressEvent{Dial: 0, Pressed: true})
 
 	result, err = decoder.Decode(encoderButtonReport(false, false, false, false))
 	if err != nil {
-		t.Fatalf("Decode dial 4 release: %v", err)
+		t.Fatalf("Decode release: %v", err)
 	}
-	assertInputEvents(t, result.Events, DialPressEvent{Dial: 3, Pressed: false})
+	assertInputEvents(t, result.Events, DialPressEvent{Dial: 0, Pressed: false})
+
+	result, err = decoder.Decode(encoderButtonReport(false, false, false, false))
+	if err != nil {
+		t.Fatalf("Decode duplicate release: %v", err)
+	}
+	assertInputEvents(t, result.Events)
 }
 
 func TestDialRotationDecodesSignedAndSimultaneousDeltas(t *testing.T) {
@@ -178,14 +153,29 @@ func TestDecodeTouchTapAndPress(t *testing.T) {
 }
 
 func TestDecodeTouchTapAcceptsObservedFourteenBytePayload(t *testing.T) {
-	payload := make([]byte, 0x0e)
-	payload[0] = touchContentTap
-	payload[1] = 1
-	binary.LittleEndian.PutUint16(payload[2:4], 372)
-	binary.LittleEndian.PutUint16(payload[4:6], 63)
-	result, err := decodeTouch(payload)
+	// Captured from the physically tested unit. Bytes after the documented
+	// coordinate fields are accepted as reserved compatibility data.
+	report := []byte{
+		0x01, 0x02, 0x0e, 0x00, 0x01, 0x01, 0x74, 0x01, 0x3f,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	}
+	var decoder inputDecoder
+	result, err := decoder.Decode(report)
 	if err != nil {
-		t.Fatalf("decodeTouch: %v", err)
+		t.Fatalf("Decode observed report: %v", err)
+	}
+	assertInputEvents(t, result.Events, TouchEvent{Kind: TouchTap, X: 372, Y: 63})
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("diagnostics = %v", result.Diagnostics)
+	}
+
+	reservedVariant := append([]byte(nil), report...)
+	for index := 14; index < len(reservedVariant); index++ {
+		reservedVariant[index] = 0xa5
+	}
+	result, err = decoder.Decode(reservedVariant)
+	if err != nil {
+		t.Fatalf("Decode report with non-zero trailing reserved bytes: %v", err)
 	}
 	assertInputEvents(t, result.Events, TouchEvent{Kind: TouchTap, X: 372, Y: 63})
 }
@@ -247,7 +237,7 @@ func TestDecodeTouchReportsOutOfRangeCoordinates(t *testing.T) {
 	}
 }
 
-func TestInvalidReportDoesNotEstablishBaseline(t *testing.T) {
+func TestInvalidReportDoesNotChangeKeyState(t *testing.T) {
 	var decoder keyDecoder
 	invalid := keyReport(t, false, false, false, false, false, false, false, false)
 	invalid[4] = 0x02
@@ -255,13 +245,11 @@ func TestInvalidReportDoesNotEstablishBaseline(t *testing.T) {
 		t.Fatal("Decode invalid state returned nil error")
 	}
 
-	result, err := decoder.Decode(keyReport(t, false, false, false, false, false, false, false, false))
+	events, err := decoder.Decode(keyReport(t, true, false, false, false, false, false, false, false))
 	if err != nil {
 		t.Fatalf("Decode first valid report: %v", err)
 	}
-	if result.Baseline == nil {
-		t.Fatal("first valid report did not establish baseline")
-	}
+	assertKeyEvents(t, events, KeyEvent{Key: 0, Pressed: true})
 }
 
 func TestDecodeKeySnapshotRejectsMalformedReports(t *testing.T) {

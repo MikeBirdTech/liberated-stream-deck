@@ -12,6 +12,11 @@ func (d *Deck) SetBrightness(percent int) error {
 
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
+	d.deviceMu.RLock()
+	defer d.deviceMu.RUnlock()
+	if d.closed {
+		return ErrClosed
+	}
 	n, err := d.device.SendFeatureReport(report)
 	if err != nil {
 		return fmt.Errorf("set brightness to %d: %w", percent, err)

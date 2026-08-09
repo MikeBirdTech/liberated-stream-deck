@@ -9,8 +9,12 @@ import (
 	"github.com/sstallion/go-hid"
 )
 
-// ErrTimeout means no input report arrived during a timed read.
-var ErrTimeout = errors.New("streamdeck input read timeout")
+var (
+	// ErrTimeout means no input report arrived during a timed read.
+	ErrTimeout = errors.New("streamdeck input read timeout")
+	// ErrClosed means an operation was attempted on a closed Deck.
+	ErrClosed = errors.New("streamdeck device is closed")
+)
 
 type hidDevice interface {
 	ReadWithTimeout([]byte, time.Duration) (int, error)
@@ -35,11 +39,12 @@ type DeviceInfo struct {
 
 // Deck is an open Stream Deck Plus HID handle.
 type Deck struct {
-	device  hidDevice
-	decoder inputDecoder
-	writeMu sync.Mutex
-	closeMu sync.Mutex
-	closed  bool
+	device   hidDevice
+	decoder  inputDecoder
+	readMu   sync.Mutex
+	writeMu  sync.Mutex
+	deviceMu sync.RWMutex
+	closed   bool
 }
 
 // List enumerates Stream Deck Plus HID devices by the official VID/PID.
@@ -66,6 +71,11 @@ func Open() (*Deck, error) {
 
 // Info returns HID enumeration information for the open device.
 func (d *Deck) Info() (DeviceInfo, error) {
+	d.deviceMu.RLock()
+	defer d.deviceMu.RUnlock()
+	if d.closed {
+		return DeviceInfo{}, ErrClosed
+	}
 	info, err := d.device.GetDeviceInfo()
 	if err != nil {
 		return DeviceInfo{}, fmt.Errorf("get Stream Deck Plus device info: %w", err)
@@ -75,8 +85,21 @@ func (d *Deck) Info() (DeviceInfo, error) {
 
 // ReadEvents performs one timed HID read and normalizes one input report.
 func (d *Deck) ReadEvents(timeout time.Duration) (InputRead, error) {
+	if timeout < 0 {
+		return InputRead{}, fmt.Errorf("input read timeout must not be negative: %s", timeout)
+	}
+
+	d.readMu.Lock()
+	defer d.readMu.Unlock()
+
 	report := make([]byte, inputReportSize)
+	d.deviceMu.RLock()
+	if d.closed {
+		d.deviceMu.RUnlock()
+		return InputRead{}, ErrClosed
+	}
 	n, err := d.device.ReadWithTimeout(report, timeout)
+	d.deviceMu.RUnlock()
 	if err != nil {
 		if errors.Is(err, hid.ErrTimeout) {
 			return InputRead{}, ErrTimeout
@@ -96,8 +119,8 @@ func (d *Deck) ReadEvents(timeout time.Duration) (InputRead, error) {
 
 // Close closes the HID handle. It is safe to call more than once.
 func (d *Deck) Close() error {
-	d.closeMu.Lock()
-	defer d.closeMu.Unlock()
+	d.deviceMu.Lock()
+	defer d.deviceMu.Unlock()
 	if d.closed {
 		return nil
 	}

@@ -172,6 +172,7 @@ type fakeHIDDevice struct {
 	featureReports    [][]byte
 	shortWrite        bool
 	shortFeatureWrite bool
+	closeCalls        int
 }
 
 func (f *fakeHIDDevice) SendFeatureReport(report []byte) (int, error) {
@@ -198,4 +199,7 @@ func (f *fakeHIDDevice) GetDeviceInfo() (*hid.DeviceInfo, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (f *fakeHIDDevice) Close() error { return nil }
+func (f *fakeHIDDevice) Close() error {
+	f.closeCalls++
+	return nil
+}

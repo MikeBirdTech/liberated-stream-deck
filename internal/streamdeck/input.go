@@ -6,8 +6,7 @@ import (
 )
 
 type keyDecoder struct {
-	initialized bool
-	state       [KeyCount]bool
+	state [KeyCount]bool
 }
 
 func decodeKeySnapshot(report []byte) ([KeyCount]bool, error) {
@@ -38,17 +37,10 @@ func decodeKeySnapshot(report []byte) ([KeyCount]bool, error) {
 	return snapshot, nil
 }
 
-func (d *keyDecoder) Decode(report []byte) (KeyRead, error) {
+func (d *keyDecoder) Decode(report []byte) ([]KeyEvent, error) {
 	next, err := decodeKeySnapshot(report)
 	if err != nil {
-		return KeyRead{}, err
-	}
-
-	if !d.initialized {
-		d.initialized = true
-		d.state = next
-		baseline := KeySnapshot{Pressed: next}
-		return KeyRead{Baseline: &baseline}, nil
+		return nil, err
 	}
 
 	events := make([]KeyEvent, 0, KeyCount)
@@ -60,12 +52,11 @@ func (d *keyDecoder) Decode(report []byte) (KeyRead, error) {
 	}
 	d.state = next
 
-	return KeyRead{Events: events}, nil
+	return events, nil
 }
 
 type dialButtonDecoder struct {
-	initialized bool
-	state       [DialCount]bool
+	state [DialCount]bool
 }
 
 type inputDecoder struct {
@@ -81,12 +72,12 @@ func (d *inputDecoder) Decode(report []byte) (InputRead, error) {
 
 	switch command {
 	case commandKeyState:
-		result, err := d.keys.Decode(report)
+		events, err := d.keys.Decode(report)
 		if err != nil {
 			return InputRead{}, err
 		}
-		input := InputRead{KeyBaseline: result.Baseline}
-		for _, event := range result.Events {
+		input := InputRead{}
+		for _, event := range events {
 			input.Events = append(input.Events, event)
 		}
 		return input, nil
@@ -110,13 +101,6 @@ func (d *inputDecoder) decodeEncoder(payload []byte) (InputRead, error) {
 		if err != nil {
 			return InputRead{}, err
 		}
-		if !d.dialButtons.initialized {
-			d.dialButtons.initialized = true
-			d.dialButtons.state = next
-			baseline := DialButtonSnapshot{Pressed: next}
-			return InputRead{DialBaseline: &baseline}, nil
-		}
-
 		result := InputRead{}
 		for index := range next {
 			if next[index] != d.dialButtons.state[index] {
