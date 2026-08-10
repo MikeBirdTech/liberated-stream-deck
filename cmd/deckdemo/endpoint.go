@@ -29,16 +29,49 @@ type remoteDemo struct {
 		Message    string `json:"message"`
 		Brightness int    `json:"brightness"`
 	} `json:"presentation"`
-	EventsSeen int `json:"events_seen"`
+	Key        *remoteKey   `json:"key"`
+	Strip      *remoteStrip `json:"strip"`
+	PollMS     int          `json:"poll_ms"`
+	EventsSeen int          `json:"events_seen"`
 	LastEvent  *struct {
 		Summary string `json:"summary"`
 	} `json:"last_event"`
 }
 
+// remoteKey is the server-owned presentation of one LCD key. State is opaque:
+// the deck never interprets it; it paints exactly the wire bg/fg and label.
+type remoteKey struct {
+	Index int    `json:"index"`
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	State string `json:"state"`
+	BG    string `json:"bg"`
+	FG    string `json:"fg"`
+}
+
+// remoteStrip is the server-owned presentation of the touch strip. Page, pages,
+// title, and lines are all server-authoritative; the deck never derives any of
+// them locally.
+type remoteStrip struct {
+	Page  int      `json:"page"`
+	Pages int      `json:"pages"`
+	Title string   `json:"title"`
+	Lines []string `json:"lines"`
+}
+
+// remoteState is the state object returned on event acks. Its key/strip shapes
+// are identical to the GET fields so the deck can repaint immediately from an
+// ack without polling.
+type remoteState struct {
+	Key   *remoteKey   `json:"key"`
+	Strip *remoteStrip `json:"strip"`
+}
+
 type eventAck struct {
-	OK         bool   `json:"ok"`
-	EventsSeen int    `json:"events_seen"`
-	Message    string `json:"message"`
+	OK         bool         `json:"ok"`
+	EventsSeen int          `json:"events_seen"`
+	Message    string       `json:"message"`
+	State      *remoteState `json:"state"`
 }
 
 type eventPostResult struct {

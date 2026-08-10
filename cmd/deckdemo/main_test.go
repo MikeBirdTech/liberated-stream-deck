@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"image"
+	"image/color"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -258,5 +260,210 @@ func assertImagesEqual(t *testing.T, got, want image.Image, name string) {
 				t.Fatalf("%s differs at %d,%d", name, x, y)
 			}
 		}
+	}
+}
+
+// ---------- revision-2 bridge mode tests ----------
+
+func TestApplyRemoteDemoModeSelection(t *testing.T) {
+	key := &remoteKey{Index: 0, ID: "demo_task", Label: "Demo Task", State: "idle", BG: "#F6F5EE", FG: "#272C24"}
+	strip := &remoteStrip{Page: 0, Pages: 3, Title: "Today", Lines: []string{"Demo Task: idle"}}
+	tests := []struct {
+		name       string
+		demo       remoteDemo
+		wantBridge bool
+	}{
+		{
+			name:       "revision 2 enters bridge regardless of command string",
+			demo:       remoteDemo{Command: "run_bridge", Revision: 2, PollMS: 5000, Key: key, Strip: strip},
+			wantBridge: true,
+		},
+		{
+			name:       "revision 2 with missing fields stays rev1",
+			demo:       remoteDemo{Command: "run_hardware_demo", Revision: 2, PollMS: 5000, Key: key},
+			wantBridge: false,
+		},
+		{
+			name:       "revision 1 with bridge fields stays rev1",
+			demo:       remoteDemo{Command: "run_hardware_demo", Revision: 1, PollMS: 5000, Key: key, Strip: strip},
+			wantBridge: false,
+		},
+		{
+			name:       "revision 0 with no bridge fields stays rev1",
+			demo:       remoteDemo{Command: "run_hardware_demo"},
+			wantBridge: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := &demoState{brightness: 15, bridge: true, activeKey: key, activeStrip: strip, pollMS: 9000}
+			if err := applyRemoteDemo(state, test.demo); err != nil {
+				t.Fatalf("applyRemoteDemo: %v", err)
+			}
+			if state.bridge != test.wantBridge {
+				t.Fatalf("bridge = %t, want %t", state.bridge, test.wantBridge)
+			}
+			if test.wantBridge {
+				if state.activeKey == nil || state.activeKey.Label != "Demo Task" {
+					t.Fatalf("bridge key = %+v", state.activeKey)
+				}
+				if state.pollMS != 5000 {
+					t.Fatalf("poll_ms = %d, want 5000", state.pollMS)
+				}
+			} else if state.activeKey != nil || state.activeStrip != nil {
+				t.Fatalf("rev1 state kept bridge fields: key=%+v strip=%+v", state.activeKey, state.activeStrip)
+			}
+		})
+	}
+}
+
+func TestBridgeRestoreRendersServerKeyAndQuietPeers(t *testing.T) {
+	state := &demoState{
+		brightness:  70,
+		bridge:      true,
+		activeKey:   &remoteKey{Index: 0, Label: "Demo Task", State: "idle", BG: "#F6F5EE", FG: "#272C24"},
+		activeStrip: &remoteStrip{Page: 0, Pages: 3, Title: "Today", Lines: []string{"Demo Task: idle"}},
+	}
+	deck := newFakeDemoDeck()
+	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
+		t.Fatalf("restoreDemo: %v", err)
+	}
+
+	wantActive := render.KeySize(render.KeyView{Index: 0, Label: "Demo Task", BG: bridgePaperBG, FG: bridgePaperInk}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[0], wantActive, "bridge active key")
+	for index := 1; index < streamdeck.KeyCount; index++ {
+		wantQuiet := render.KeySize(render.KeyView{Index: index, BG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+		assertImagesEqual(t, deck.keyImages[index], wantQuiet, "quiet key")
+	}
+	wantStrip := render.Strip(render.StripView{Title: "Today", Lines: []string{"Demo Task: idle"}, Page: 0, Pages: 3})
+	assertImagesEqual(t, deck.stripImages[0], wantStrip, "bridge strip")
+}
+
+func TestBridgeAckRepaintsKeyAndStripFromState(t *testing.T) {
+	deck := newFakeDemoDeck()
+	state := &demoState{
+		brightness:  70,
+		bridge:      true,
+		activeKey:   &remoteKey{Index: 0, Label: "Demo Task", State: "idle", BG: "#F6F5EE", FG: "#272C24"},
+		activeStrip: &remoteStrip{Page: 0, Pages: 3, Title: "Today", Lines: []string{"Demo Task: idle"}},
+	}
+	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
+		t.Fatalf("restoreDemo: %v", err)
+	}
+	before := len(deck.stripImages)
+
+	ackState := &remoteState{
+		Key:   &remoteKey{Index: 0, Label: "Demo Task", State: "running", BG: "#6FA25C", FG: "#F6F5EE"},
+		Strip: &remoteStrip{Page: 0, Pages: 3, Title: "Today", Lines: []string{"Demo Task: running", "7 runs · 7 ok · 0 err"}},
+	}
+	ack := eventAck{OK: true, EventsSeen: 7, Message: "Key 0 down received - Demo Task started", State: ackState}
+	if err := handleAck(deck, state, streamdeck.ModelPlus, ack); err != nil {
+		t.Fatalf("handleAck: %v", err)
+	}
+	if !strings.Contains(state.remoteLast, "Demo Task started") {
+		t.Fatalf("ack message not adopted: %q", state.remoteLast)
+	}
+	if state.activeKey.State != "running" || state.activeKey.BG != "#6FA25C" {
+		t.Fatalf("ack key not adopted: %+v", state.activeKey)
+	}
+	wantBG, _ := keyRenderColors(ackState.Key)
+	got := color.NRGBAModel.Convert(deck.keyImages[0].At(60, 60)).(color.NRGBA)
+	if got != color.NRGBAModel.Convert(wantBG).(color.NRGBA) {
+		t.Fatalf("key 0 background = %#v, want leaf %#v", got, wantBG)
+	}
+	if len(deck.stripImages) != before+1 {
+		t.Fatalf("strip images = %d, want %d", len(deck.stripImages), before+1)
+	}
+}
+
+func TestBridgePollAdoptsAndRepaintsServerState(t *testing.T) {
+	deck := newFakeDemoDeck()
+	state := &demoState{
+		brightness:  70,
+		bridge:      true,
+		pollMS:      2000,
+		activeKey:   &remoteKey{Index: 0, Label: "Demo Task", State: "idle", BG: "#F6F5EE", FG: "#272C24"},
+		activeStrip: &remoteStrip{Page: 0, Pages: 3, Title: "Today", Lines: []string{"Demo Task: idle"}},
+	}
+	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
+		t.Fatalf("restoreDemo: %v", err)
+	}
+
+	poll := remoteDemo{Revision: 2, PollMS: 3000, EventsSeen: 9}
+	poll.Key = &remoteKey{Index: 0, Label: "Demo Task", State: "success", BG: "#55764A", FG: "#F6F5EE"}
+	poll.Strip = &remoteStrip{Page: 1, Pages: 3, Title: "Next meeting", Lines: []string{"Demo Task: ok 08:28", "9 runs · 9 ok · 0 err"}}
+	if err := handlePoll(deck, state, streamdeck.ModelPlus, poll); err != nil {
+		t.Fatalf("handlePoll: %v", err)
+	}
+	if state.pollMS != 3000 || state.remoteEventsSeen != 9 {
+		t.Fatalf("poll cadence/events = %d/%d", state.pollMS, state.remoteEventsSeen)
+	}
+	if state.activeStrip == nil || state.activeStrip.Page != 1 || state.activeStrip.Title != "Next meeting" {
+		t.Fatalf("poll strip not adopted: %+v", state.activeStrip)
+	}
+	wantBG, _ := keyRenderColors(poll.Key)
+	got := color.NRGBAModel.Convert(deck.keyImages[0].At(60, 60)).(color.NRGBA)
+	if got != color.NRGBAModel.Convert(wantBG).(color.NRGBA) {
+		t.Fatalf("key 0 background = %#v, want moss %#v", got, wantBG)
+	}
+}
+
+func TestRunDemoRendersLocallyWhenEndpointUnavailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	deck := newFakeDemoDeck()
+	deck.reads = []fakeRead{{err: errors.New("USB removed")}}
+	openCalls := 0
+	open := func() (demoDeck, error) {
+		openCalls++
+		if openCalls == 1 {
+			return deck, nil
+		}
+		cancel()
+		return nil, errors.New("end of test")
+	}
+	fetch := func(context.Context) (remoteDemo, error) {
+		return remoteDemo{}, errors.New("endpoint down")
+	}
+
+	if err := runDemo(ctx, &demoState{brightness: 50}, open, fetch, time.Millisecond); err != nil {
+		t.Fatalf("runDemo: %v", err)
+	}
+	if len(deck.keyImages) != streamdeck.KeyCount {
+		t.Fatalf("no local render on endpoint failure: keys = %d, want %d", len(deck.keyImages), streamdeck.KeyCount)
+	}
+	if deck.brightnessCalls[0] != 50 {
+		t.Fatalf("brightness = %v, want [50]", deck.brightnessCalls)
+	}
+}
+
+func TestBridgePollLoopFollowsServerCadence(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	calls := 0
+	fetch := func(context.Context) (remoteDemo, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return remoteDemo{Revision: 2, PollMS: 5}, nil
+	}
+	results := make(chan pollResult, 16)
+	stop := startBridgePoll(ctx, &demoState{pollMS: 5}, fetch, results)
+	defer stop()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		mu.Lock()
+		count := calls
+		mu.Unlock()
+		if count >= 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d polls in budget", count)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

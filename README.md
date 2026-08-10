@@ -108,15 +108,24 @@ Demo indexing is one-based in labels and logs. Stop the demo with Control-C.
 
 ### Remote presentation
 
-`deckdemo` is remote-commanded. On every connection it fetches
-`http://controller:9999/api/controller` and only draws to the deck
-while that endpoint answers `command=run_hardware_demo`, adopting the server's
-theme, title, message, and brightness. If the endpoint is unreachable or
-answers any other command (for example `run_bridge`), the demo skips
-rendering, logs `device setup failed ... retry=1s`, and stays dark until the
-server cooperates. This is intentional gating so an external controller
-decides what the deck shows; it also means a standalone `deckdemo` run needs
-that service on `controller:9999` to draw anything.
+`deckdemo` is remote-commanded from `http://controller:9999/api/controller`.
+
+- revision 2 selects **bridge mode**: the controller owns all state and semantics and
+  the deck is a pure renderer. It paints the server-provided key (label plus
+  the exact `bg`/`fg` hex colors from the wire, other keys in quiet paper),
+  paints the server-provided strip page (title, lines, page dots, events
+  seen), POSTs raw physical events unchanged, and re-renders immediately from
+  each event ack's `state` object and from periodic GETs on the
+  server-chosen `poll_ms` cadence. Page position and key colors are always
+  server-derived; the deck never interprets what a key/dial/flick means.
+- revision < 2, or a missing bridge section, keeps the classic rev-1 local
+  demo behavior.
+- If the endpoint is unreachable, times out, or returns an unreadable body,
+  the deck falls back to the classic local render instead of going dark.
+
+The `command` field stays `"run_hardware_demo"` forever as backward
+compatibility and is deliberately not used to select the mode. (Previously the
+deck refused to draw on any other value and sat dark; that behavior is gone.)
 
 If both a Plus and a Mini are attached, the demo connects the Plus first
 (`OpenAny` preference); a targeted run for the other model uses `OpenModel`.
@@ -136,11 +145,10 @@ The agent's launchd label is `com.mikebirdtech.liberated-stream-deck`. It runs
 `bin/deckdemo` from the checkout with logs under
 `~/Library/Logs/liberated-stream-deck/`.
 
-Important: `deckdemo` is remote-commanded from `controller:9999/api/controller`
-and only draws to the deck while that endpoint answers `command=run_hardware_demo`
-(see the remote presentation notes in the demo section). If that service is
-absent or answers a different command, the daemon runs but deliberately draws
-nothing. This is intentional gating, not a hang.
+Note: `deckdemo` is remote-commanded from `controller:9999/api/controller`;
+revision 2 runs in bridge mode (see the remote presentation notes in the demo
+section). Any endpoint failure falls back to classic local rendering, so the
+deck is never left dark.
 
 ## Elgato application conflict
 

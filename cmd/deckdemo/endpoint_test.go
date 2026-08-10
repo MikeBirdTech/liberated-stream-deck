@@ -179,3 +179,67 @@ func TestApplyRemoteDemo(t *testing.T) {
 		t.Fatalf("presentation state = %+v", state)
 	}
 }
+
+func TestFetchRemoteDemoRevision2BridgeFields(t *testing.T) {
+	client := testHTTPClient(func(request *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{
+			"command":"run_hardware_demo",
+			"revision":2,
+			"presentation":{"theme":"paper","title":"Demo Garden","message":"Demo link established","brightness":70},
+			"key":{"index":0,"id":"demo_task","label":"Demo Task","state":"idle","bg":"#F6F5EE","fg":"#272C24"},
+			"strip":{"page":1,"pages":3,"title":"Next meeting","lines":["Demo Task: running","25 runs · 25 ok · 0 err"]},
+			"poll_ms":5000,
+			"events_seen":25,
+			"last_event":null
+		}`), nil
+	})
+
+	demo, err := fetchRemoteDemo(context.Background(), client, "http://playground.test/demo")
+	if err != nil {
+		t.Fatalf("fetchRemoteDemo: %v", err)
+	}
+	if demo.Revision != 2 || demo.PollMS != 5000 || demo.EventsSeen != 25 {
+		t.Fatalf("revision/poll/events = %d/%d/%d", demo.Revision, demo.PollMS, demo.EventsSeen)
+	}
+	if demo.Key == nil || demo.Key.Index != 0 || demo.Key.Label != "Demo Task" || demo.Key.State != "idle" ||
+		demo.Key.BG != "#F6F5EE" || demo.Key.FG != "#272C24" || demo.Key.ID != "demo_task" {
+		t.Fatalf("key = %+v", demo.Key)
+	}
+	if demo.Strip == nil || demo.Strip.Page != 1 || demo.Strip.Pages != 3 || demo.Strip.Title != "Next meeting" {
+		t.Fatalf("strip = %+v", demo.Strip)
+	}
+	if len(demo.Strip.Lines) != 2 || demo.Strip.Lines[0] != "Demo Task: running" {
+		t.Fatalf("strip lines = %v", demo.Strip.Lines)
+	}
+}
+
+func TestPostEventAckCarriesServerState(t *testing.T) {
+	client := testHTTPClient(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{
+			"ok":true,
+			"events_seen":7,
+			"message":"Key 0 down received - Demo Task started",
+			"state":{
+				"key":{"index":0,"id":"demo_task","label":"Demo Task","state":"running","bg":"#6FA25C","fg":"#F6F5EE"},
+				"strip":{"page":0,"pages":3,"title":"Today","lines":["Demo Task: running","7 runs · 7 ok · 0 err"]}
+			}
+		}`), nil
+	})
+
+	ack, err := postEvent(context.Background(), client, "http://playground.test/event", map[string]any{"kind": "key", "index": 0, "pressed": true})
+	if err != nil {
+		t.Fatalf("postEvent: %v", err)
+	}
+	if ack.EventsSeen != 7 {
+		t.Fatalf("events_seen = %d", ack.EventsSeen)
+	}
+	if ack.State == nil || ack.State.Key == nil || ack.State.Strip == nil {
+		t.Fatalf("ack state missing: %+v", ack.State)
+	}
+	if ack.State.Key.State != "running" || ack.State.Key.BG != "#6FA25C" {
+		t.Fatalf("ack key = %+v", ack.State.Key)
+	}
+	if ack.State.Strip.Lines[0] != "Demo Task: running" {
+		t.Fatalf("ack strip lines = %v", ack.State.Strip.Lines)
+	}
+}

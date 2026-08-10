@@ -28,6 +28,7 @@ var (
 	paperLeaf      = color.NRGBA{R: 0x6f, G: 0xa2, B: 0x5c, A: 255}
 	paperAmber     = color.NRGBA{R: 0xa0, G: 0x6d, B: 0x0c, A: 255}
 	paperRust      = color.NRGBA{R: 0xac, G: 0x4c, B: 0x37, A: 255}
+	paperFaint     = color.NRGBA{R: 0xda, G: 0xd9, B: 0xd0, A: 255}
 )
 
 // KeyView is the complete state needed to draw one demo key.
@@ -35,6 +36,13 @@ type KeyView struct {
 	Index    int
 	On       bool
 	Selected bool
+
+	// Bridge-mode fields. When BG is set, the key is painted server-side: a
+	// BG fill, and Label (if any) centered in FG. The On/Selected demo
+	// styling is ignored. A BG-only view renders a quiet unlabeled key.
+	Label string
+	BG    color.Color
+	FG    color.Color
 }
 
 // Key draws a generated key label, state, and optional selection border.
@@ -45,6 +53,21 @@ func Key(view KeyView) image.Image {
 // KeySize draws a generated key at a model's native key dimensions.
 func KeySize(view KeyView, width, height int) image.Image {
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	if view.BG != nil {
+		fill(img, img.Bounds(), view.BG)
+		if view.Label != "" {
+			scale := 2
+			if width <= streamdeck.MiniKeyImageWidth || len(view.Label) > 12 {
+				scale = 1
+			}
+			fg := view.FG
+			if fg == nil {
+				fg = paperInk
+			}
+			drawCenteredText(img, view.Label, (height-13*scale)/2, scale, fg)
+		}
+		return img
+	}
 	background := keyOff
 	if view.On {
 		background = keyOn
@@ -88,11 +111,22 @@ type StripView struct {
 	Message     string
 	EventsSeen  int
 	LastEvent   string
+
+	// Bridge-page fields. When Lines is non-nil, Strip draws the
+	// server-provided page (title, lines, events seen, page dots) instead of
+	// the diagnostic views. Page is always server-authoritative.
+	Lines []string
+	Page  int
+	Pages int
 }
 
 // Strip draws the complete 800x100 diagnostic window image.
 func Strip(view StripView) image.Image {
 	img := image.NewNRGBA(image.Rect(0, 0, streamdeck.TouchStripWidth, streamdeck.TouchStripHeight))
+	if view.Lines != nil {
+		drawBridgePage(img, view)
+		return img
+	}
 	if view.Theme == "paper" {
 		drawPaperGarden(img, view)
 		return img
@@ -136,6 +170,51 @@ func drawPaperGarden(dst draw.Image, view StripView) {
 	}
 	last = "Last: " + last
 	drawText(dst, last, 433, 51, textScale(last, 25), paperRust)
+}
+
+func drawBridgePage(dst draw.Image, view StripView) {
+	fill(dst, dst.Bounds(), paperGarden)
+	fill(dst, image.Rect(0, 0, 7, streamdeck.TouchStripHeight), paperMoss)
+	fill(dst, image.Rect(405, 12, 407, 88), paperLeaf)
+
+	title := view.Title
+	if title == "" {
+		title = "Demo Garden"
+	}
+	drawText(dst, title, 20, 10, 2, paperMoss)
+
+	y := 32
+	for _, line := range view.Lines {
+		if y >= 88 {
+			break
+		}
+		scale := 1
+		if len(view.Lines) <= 2 && len(line) <= 26 {
+			scale = 2
+		}
+		drawText(dst, line, 20, y, scale, paperInk)
+		y += 13*scale + 3
+	}
+
+	count := fmt.Sprintf("%d events received", view.EventsSeen)
+	drawText(dst, count, 433, 12, textScale(count, 24), paperAmber)
+	last := view.LastEvent
+	if last == "" {
+		last = "Waiting for input"
+	}
+	last = "Last: " + last
+	drawText(dst, last, 433, 51, textScale(last, 25), paperRust)
+
+	// Subtle page indicator: filled dots, current page in moss.
+	if view.Pages > 1 {
+		for page := 0; page < view.Pages; page++ {
+			dotColor := paperFaint
+			if page == view.Page {
+				dotColor = paperMoss
+			}
+			drawCircle(dst, 20+page*11, 91, 3, dotColor)
+		}
+	}
 }
 
 func textScale(text string, scaleTwoLimit int) int {

@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MikeBirdTech/liberated-stream-deck/internal/render"
@@ -35,6 +38,72 @@ type demoState struct {
 	remoteMessage    string
 	remoteEventsSeen int
 	remoteLast       string
+
+	// revision-2 bridge mode: the controller owns all state and semantics. The deck is
+	// a pure renderer - it paints exactly what the server sends (GET poll and
+	// POST acks) and never interprets a key/dial/flick meaning locally.
+	bridge      bool
+	activeKey   *remoteKey
+	activeStrip *remoteStrip
+	pollMS      int
+}
+
+// pollResult carries one bridge-mode poll response from the background poller
+// into the main event loop.
+type pollResult struct {
+	demo remoteDemo
+	err  error
+}
+
+var (
+	// bridgePaperBG is the quiet paper fill (#F6F5EE) for unlabeled keys and
+	// the fallback background when the server's bg cannot be parsed.
+	bridgePaperBG = color.NRGBA{R: 0xf6, G: 0xf5, B: 0xee, A: 255}
+	// bridgePaperInk is the fallback foreground (#272C24) when the server's
+	// fg cannot be parsed.
+	bridgePaperInk = color.NRGBA{R: 0x27, G: 0x2c, B: 0x24, A: 255}
+)
+
+// parseHexColor parses "#RRGGBB" (the '#' is optional) into an opaque color.
+func parseHexColor(s string) (color.Color, error) {
+	hex := strings.TrimPrefix(s, "#")
+	if len(hex) != 6 {
+		return nil, fmt.Errorf("expected #RRGGBB, got %q", s)
+	}
+	var values [3]uint8
+	for i := 0; i < 3; i++ {
+		value, err := strconv.ParseUint(hex[i*2:i*2+2], 16, 8)
+		if err != nil {
+			return nil, fmt.Errorf("parse %q: %w", s, err)
+		}
+		values[i] = uint8(value)
+	}
+	return color.NRGBA{R: values[0], G: values[1], B: values[2], A: 255}, nil
+}
+
+// keyRenderColors resolves the wire bg/fg hex colors for a server key, falling
+// back to quiet paper/ink on unparseable values.
+func keyRenderColors(key *remoteKey) (bg, fg color.Color) {
+	bg = bridgePaperBG
+	fg = bridgePaperInk
+	if key == nil {
+		return
+	}
+	if key.BG != "" {
+		if parsed, err := parseHexColor(key.BG); err == nil {
+			bg = parsed
+		} else {
+			log.Printf("bridge key bg %q ignored: %v", key.BG, err)
+		}
+	}
+	if key.FG != "" {
+		if parsed, err := parseHexColor(key.FG); err == nil {
+			fg = parsed
+		} else {
+			log.Printf("bridge key fg %q ignored: %v", key.FG, err)
+		}
+	}
+	return
 }
 
 type demoDeck interface {
@@ -96,10 +165,18 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		info, setupErr := deck.Info()
 		var remote remoteDemo
 		if setupErr == nil {
-			remote, setupErr = fetchDemo(ctx)
-		}
-		if setupErr == nil {
-			setupErr = applyRemoteDemo(state, remote)
+			var fetchErr error
+			remote, fetchErr = fetchDemo(ctx)
+			if fetchErr != nil {
+				// Hardening: an absent or broken endpoint must never strand
+				// the deck dark. Fall back to the classic local demo render.
+				log.Printf("demo endpoint unavailable mode=rev1-local error=%q", fetchErr)
+				state.bridge = false
+				state.activeKey = nil
+				state.activeStrip = nil
+			} else {
+				applyRemoteDemo(state, remote)
+			}
 		}
 		if setupErr == nil {
 			setupErr = restoreDemo(deck, state, info.Model)
@@ -116,8 +193,17 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 			continue
 		}
 
-		log.Printf("demo endpoint connected revision=%d theme=%q events_seen=%d", remote.Revision, remote.Presentation.Theme, remote.EventsSeen)
+		mode := "rev1"
+		if state.bridge {
+			mode = "bridge"
+		}
+		log.Printf("demo endpoint connected revision=%d mode=%s theme=%q events_seen=%d", remote.Revision, mode, remote.Presentation.Theme, remote.EventsSeen)
 		log.Printf("device connected vid=%04x pid=%04x product=%q model=%q", info.VendorID, info.ProductID, info.Product, info.Model)
+		if state.bridge && state.activeKey != nil && state.activeStrip != nil {
+			log.Printf("bridge view key[%d]=%q state=%q strip=%q page=%d/%d poll_ms=%d",
+				state.activeKey.Index, state.activeKey.Label, state.activeKey.State,
+				state.activeStrip.Title, state.activeStrip.Page, state.activeStrip.Pages, state.pollMS)
+		}
 		if info.Model.HasTouchStrip() {
 			log.Printf("output restored keys=1-8 strip=800x100 brightness=%d", state.brightness)
 		} else {
@@ -125,7 +211,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 			log.Printf("output restored keys=1-%d key-size=%dx%d brightness=%d", info.Model.KeyCount(), width, height, state.brightness)
 		}
 
-		connectionErr := runConnected(ctx, deck, state, info.Model)
+		connectionErr := runConnected(ctx, deck, state, info.Model, fetchDemo)
 		closeErr := deck.Close()
 		if ctx.Err() != nil {
 			if closeErr != nil {
@@ -146,10 +232,18 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 	}
 }
 
-func runConnected(ctx context.Context, deck demoDeck, state *demoState, model streamdeck.Model) error {
+func runConnected(ctx context.Context, deck demoDeck, state *demoState, model streamdeck.Model, fetchDemo fetchDemoFunc) error {
 	connectionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	eventResults := make(chan eventPostResult, 64)
+
+	var pollResults chan pollResult
+	var stopPoll func()
+	if state.bridge {
+		pollResults = make(chan pollResult, 1)
+		stopPoll = startBridgePoll(connectionCtx, state, fetchDemo, pollResults)
+		defer stopPoll()
+	}
 
 	for {
 		if ctx.Err() != nil {
@@ -161,12 +255,19 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 				log.Printf("demo event error=%q", result.err)
 				continue
 			}
-			state.remoteEventsSeen = result.ack.EventsSeen
-			state.remoteLast = lastEventMessage(result.ack.Message)
-			log.Printf("demo ack events_seen=%d message=%q", result.ack.EventsSeen, result.ack.Message)
-			if err := renderStrip(deck, state, model); err != nil {
+			if err := handleAck(deck, state, model, result.ack); err != nil {
 				return err
 			}
+			continue
+		case poll := <-pollResults:
+			if poll.err != nil {
+				log.Printf("demo poll error=%q", poll.err)
+				continue
+			}
+			if err := handlePoll(deck, state, model, poll.demo); err != nil {
+				return err
+			}
+			continue
 		default:
 		}
 
@@ -179,13 +280,126 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 		}
 		logInputDiagnostics(result)
 		for _, event := range result.Events {
-			if err := handleEvent(deck, state, model, event); err != nil {
+			if state.bridge {
+				// Pure renderer: no local interpretation or rerender. Log the
+				// raw event, POST it, and let the ack/poll bring the new
+				// server-owned state.
+				logBridgeInput(state, event)
+			} else if err := handleEvent(deck, state, model, event); err != nil {
 				return err
 			}
 			if payload, ok := remoteEvent(event); ok {
 				postEventAsync(connectionCtx, payload, eventResults)
 			}
 		}
+	}
+}
+
+// startBridgePoll launches the poller goroutine on the controller's chosen cadence and
+// returns a stop function. poll_ms is treated as opaque (currently 2000-5000).
+func startBridgePoll(ctx context.Context, state *demoState, fetchDemo fetchDemoFunc, results chan<- pollResult) func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		interval := time.Duration(state.pollMS) * time.Millisecond
+		if interval <= 0 {
+			interval = 2 * time.Second
+		}
+		for {
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-stop:
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			demo, err := fetchDemo(ctx)
+			if err == nil && demo.PollMS > 0 {
+				interval = time.Duration(demo.PollMS) * time.Millisecond
+			}
+			select {
+			case results <- pollResult{demo: demo, err: err}:
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
+}
+
+// handleAck repaints from an event POST ack. revision-2 acks carry a state
+// object with the server's resulting key/strip, allowing an immediate
+// render without waiting for the next poll.
+func handleAck(deck demoDeck, state *demoState, model streamdeck.Model, ack eventAck) error {
+	state.remoteEventsSeen = ack.EventsSeen
+	state.remoteLast = lastEventMessage(ack.Message)
+	if ack.State != nil {
+		if ack.State.Key != nil {
+			state.activeKey = ack.State.Key
+		}
+		if ack.State.Strip != nil {
+			state.activeStrip = ack.State.Strip
+		}
+	}
+	log.Printf("demo ack events_seen=%d message=%q", ack.EventsSeen, ack.Message)
+	if err := renderStrip(deck, state, model); err != nil {
+		return err
+	}
+	if state.bridge && state.activeKey != nil {
+		if err := renderKey(deck, state, model, state.activeKey.Index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// handlePoll applies one bridge-mode GET and re-renders from the server state.
+func handlePoll(deck demoDeck, state *demoState, model streamdeck.Model, demo remoteDemo) error {
+	if demo.Revision >= 2 && demo.Key != nil && demo.Strip != nil && demo.PollMS > 0 {
+		state.activeKey = demo.Key
+		state.activeStrip = demo.Strip
+		state.pollMS = demo.PollMS
+	}
+	state.remoteEventsSeen = demo.EventsSeen
+	state.remoteLast = ""
+	if demo.LastEvent != nil {
+		state.remoteLast = lastEventMessage(demo.LastEvent.Summary)
+	}
+	if err := renderStrip(deck, state, model); err != nil {
+		return err
+	}
+	if state.activeKey != nil {
+		if err := renderKey(deck, state, model, state.activeKey.Index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func logBridgeInput(state *demoState, event streamdeck.Event) {
+	switch event := event.(type) {
+	case streamdeck.KeyEvent:
+		log.Printf("input key key=%d pressed=%t", event.Key+1, event.Pressed)
+		state.latestInput = fmt.Sprintf("KEY %d %s", event.Key+1, pressedLabel(event.Pressed))
+	case streamdeck.DialRotateEvent:
+		log.Printf("input dial dial=%d delta=%+d", event.Dial+1, event.Delta)
+		state.latestInput = fmt.Sprintf("D%d %+03d", event.Dial+1, event.Delta)
+	case streamdeck.DialPressEvent:
+		log.Printf("input dial dial=%d pressed=%t", event.Dial+1, event.Pressed)
+		state.latestInput = fmt.Sprintf("D%d %s", event.Dial+1, pressedLabel(event.Pressed))
+	case streamdeck.TouchEvent:
+		logTouch(event)
+		state.latestInput = touchInputSummary(event)
+		state.latestTouch = &event
 	}
 }
 
@@ -224,18 +438,35 @@ func restoreDemo(deck demoDeck, state *demoState, model streamdeck.Model) error 
 }
 
 func applyRemoteDemo(state *demoState, demo remoteDemo) error {
-	if demo.Command != "run_hardware_demo" {
-		return fmt.Errorf("unsupported remote demo command %q", demo.Command)
-	}
-	state.brightness = demo.Presentation.Brightness
-	state.remoteTheme = demo.Presentation.Theme
-	state.remoteTitle = demo.Presentation.Title
-	state.remoteMessage = demo.Presentation.Message
 	state.remoteEventsSeen = demo.EventsSeen
 	state.remoteLast = ""
 	if demo.LastEvent != nil {
 		state.remoteLast = lastEventMessage(demo.LastEvent.Summary)
 	}
+	// Mode is chosen from revision, never from the command string: the
+	// command field stays "run_hardware_demo" forever as deliberate backward
+	// compatibility, so it is ignored here.
+	if demo.Revision >= 2 && demo.Key != nil && demo.Strip != nil && demo.PollMS > 0 {
+		state.bridge = true
+		state.activeKey = demo.Key
+		state.activeStrip = demo.Strip
+		state.pollMS = demo.PollMS
+		if demo.Presentation.Brightness > 0 {
+			state.brightness = demo.Presentation.Brightness
+		}
+		return nil
+	}
+	// revision < 2 or missing bridge fields: keep the classic rev-1 demo.
+	state.bridge = false
+	state.activeKey = nil
+	state.activeStrip = nil
+	state.pollMS = 0
+	if demo.Presentation.Brightness > 0 {
+		state.brightness = demo.Presentation.Brightness
+	}
+	state.remoteTheme = demo.Presentation.Theme
+	state.remoteTitle = demo.Presentation.Title
+	state.remoteMessage = demo.Presentation.Message
 	return nil
 }
 
@@ -337,7 +568,22 @@ func handleEvent(deck demoDeck, state *demoState, model streamdeck.Model, event 
 
 func renderKey(deck demoDeck, state *demoState, model streamdeck.Model, index int) error {
 	width, height := model.KeyImageSize()
-	img := render.KeySize(render.KeyView{Index: index, On: state.keys[index], Selected: index == state.selectedKey}, width, height)
+	view := render.KeyView{}
+	if state.bridge {
+		// Pure renderer: paint exactly what the server sent. The active key
+		// carries its wire label and colors; every other key is quiet paper
+		// with no label.
+		view.Index = index
+		if state.activeKey != nil && state.activeKey.Index == index {
+			view.Label = state.activeKey.Label
+			view.BG, view.FG = keyRenderColors(state.activeKey)
+		} else {
+			view.BG = bridgePaperBG
+		}
+	} else {
+		view = render.KeyView{Index: index, On: state.keys[index], Selected: index == state.selectedKey}
+	}
+	img := render.KeySize(view, width, height)
 	if err := deck.SetKeyImage(index, img); err != nil {
 		return fmt.Errorf("render key %d: %w", index+1, err)
 	}
@@ -352,13 +598,32 @@ func renderStrip(deck demoDeck, state *demoState, model streamdeck.Model) error 
 	if !ok {
 		return fmt.Errorf("%s device does not provide touch-strip output", model)
 	}
-	img := render.Strip(render.StripView{
-		Counter: state.counter, Brightness: state.brightness,
-		SelectedKey: state.selectedKey, SelectedOn: state.keys[state.selectedKey],
-		Mode: displayModes[state.mode], LastInput: state.latestInput, Touch: state.latestTouch,
-		Theme: state.remoteTheme, Title: state.remoteTitle, Message: state.remoteMessage,
-		EventsSeen: state.remoteEventsSeen, LastEvent: state.remoteLast,
-	})
+	var view render.StripView
+	if state.bridge {
+		view = render.StripView{
+			EventsSeen: state.remoteEventsSeen,
+			LastEvent:  state.remoteLast,
+			Lines:      []string{}, // non-nil selects the bridge page
+		}
+		if state.activeStrip != nil {
+			view.Title = state.activeStrip.Title
+			view.Lines = state.activeStrip.Lines
+			view.Page = state.activeStrip.Page
+			view.Pages = state.activeStrip.Pages
+			if view.Lines == nil {
+				view.Lines = []string{}
+			}
+		}
+	} else {
+		view = render.StripView{
+			Counter: state.counter, Brightness: state.brightness,
+			SelectedKey: state.selectedKey, SelectedOn: state.keys[state.selectedKey],
+			Mode: displayModes[state.mode], LastInput: state.latestInput, Touch: state.latestTouch,
+			Theme: state.remoteTheme, Title: state.remoteTitle, Message: state.remoteMessage,
+			EventsSeen: state.remoteEventsSeen, LastEvent: state.remoteLast,
+		}
+	}
+	img := render.Strip(view)
 	if err := stripDeck.SetTouchStripImage(img); err != nil {
 		return fmt.Errorf("render touch strip: %w", err)
 	}
