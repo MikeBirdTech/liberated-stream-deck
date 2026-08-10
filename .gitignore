@@ -16,3 +16,6 @@ coverage.out
 # Temporary diagnostics
 *.log
 *.tmp
+
+# Personal todo (never commit - this repo is public)
+TODO.md
