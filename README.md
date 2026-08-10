@@ -118,6 +118,12 @@ Demo indexing is one-based in labels and logs. Stop the demo with Control-C.
   each event ack's `state` object and from periodic GETs on the
   server-chosen `poll_ms` cadence. Page position and key colors are always
   server-derived; the deck never interprets what a key/dial/flick means.
+- The optional `boot_image` object (`revision` + base64-encoded PNG/JPEG)
+  persists a server-chosen 800x480 power-on frame to the device. Uploads use
+  the undocumented boot-frame channel (command `0x09`, target `0x05`, JPEG,
+  chunk index before chunk size in the header) reverse-engineered from the
+  official app on 2026-08-10; unlike the documented image commands the result
+  survives power-off. Only a revision change triggers an upload.
 - The optional `background` object defines full-key idle frames (same
   label/bg/fg shape as `key`, one entry per index). Keys outside the active
   key render these frames instead of quiet paper, and a clean shutdown
@@ -130,6 +136,9 @@ Demo indexing is one-based in labels and logs. Stop the demo with Control-C.
   demo behavior.
 - If the endpoint is unreachable, times out, or returns an unreadable body,
   the deck falls back to the classic local render instead of going dark.
+
+The boot-frame channel is also recorded in the Protocol section: it is the
+one capability of this library that is not part of Elgato's public HID docs.
 
 The `command` field stays `"run_hardware_demo"` forever as backward
 compatibility and is deliberately not used to select the mode. (Previously the
@@ -251,6 +260,13 @@ The original Mini protocol is materially different from both the Plus and the
 reports with a 16-byte header and rotated BMP payload; and a 17-byte brightness
 feature report beginning `05 55 aa d1 01`. The 8191-byte image report sometimes
 called the "classic" format belongs to the 15-key Original, not PID `0x0063`.
+
+The boot-frame channel (undocumented, reverse-engineered 2026-08-10): a
+full-image upload via output command `0x09` with target byte `0x05`. Frames
+are the standard 1024-byte chunked reports but with chunk index at header
+offset +4 and chunk size at +6 (reversed compared with the documented
+commands). The payload is an 800x480 JPEG. Uploads through this channel are
+persisted on-device and rendered at the next power-on.
 
 One Plus compatibility detail comes from physical testing: the tested firmware
 produced TAP/PRESS-compatible reports with a 14-byte payload, including the

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"image"
 	"image/color"
+	"image/png"
 	"strings"
 	"sync"
 	"testing"
@@ -200,6 +203,7 @@ type fakeDemoDeck struct {
 	stripImages     []image.Image
 	closeCalls      int
 	onStripImage    func()
+	bootImages      []image.Image
 }
 
 func newFakeDemoDeck() *fakeDemoDeck {
@@ -243,6 +247,11 @@ func (d *fakeDemoDeck) SetTouchStripImage(img image.Image) error {
 
 func (d *fakeDemoDeck) Close() error {
 	d.closeCalls++
+	return nil
+}
+
+func (d *fakeDemoDeck) UploadBootImage(img image.Image) error {
+	d.bootImages = append(d.bootImages, img)
 	return nil
 }
 
@@ -572,4 +581,75 @@ func TestRenderBackgroundKeysPersistsEveryKey(t *testing.T) {
 
 	wantQuiet := render.KeySize(render.KeyView{Index: 4, BG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
 	assertImagesEqual(t, deck.keyImages[4], wantQuiet, "uncovered key quiet paper")
+}
+
+func TestMaybeUploadBootImageRevisionGated(t *testing.T) {
+	deck := newFakeDemoDeck()
+	state := &demoState{bridge: true}
+
+	raw := encodeTestPNG(16, 16)
+	boot := &remoteBootImage{Revision: 1, Data: base64.StdEncoding.EncodeToString(raw)}
+
+	if err := maybeUploadBootImage(deck, state, boot); err != nil {
+		t.Fatalf("first upload: %v", err)
+	}
+	if len(deck.bootImages) != 1 {
+		t.Fatalf("uploads = %d, want 1", len(deck.bootImages))
+	}
+	if b := deck.bootImages[0].Bounds(); b.Dx() != 16 || b.Dy() != 16 {
+		t.Fatalf("uploaded image bounds = %v, want passthrough 16x16 (scaling is the library's job)", b)
+	}
+	if state.bootImageRev != 1 {
+		t.Fatalf("bootImageRev = %d, want 1", state.bootImageRev)
+	}
+
+	if err := maybeUploadBootImage(deck, state, boot); err != nil {
+		t.Fatalf("same-revision upload: %v", err)
+	}
+	if len(deck.bootImages) != 1 {
+		t.Fatalf("same revision re-uploaded: %d uploads", len(deck.bootImages))
+	}
+
+	boot2 := &remoteBootImage{Revision: 2, Data: base64.StdEncoding.EncodeToString(raw)}
+	if err := maybeUploadBootImage(deck, state, boot2); err != nil {
+		t.Fatalf("second revision: %v", err)
+	}
+	if len(deck.bootImages) != 2 || state.bootImageRev != 2 {
+		t.Fatalf("second revision not uploaded: %d uploads rev=%d", len(deck.bootImages), state.bootImageRev)
+	}
+}
+
+func TestMaybeUploadBootImageSkipsOrFails(t *testing.T) {
+	deck := newFakeDemoDeck()
+	state := &demoState{bridge: true}
+	if err := maybeUploadBootImage(deck, state, nil); err != nil {
+		t.Fatalf("nil boot: %v", err)
+	}
+	if err := maybeUploadBootImage(deck, state, &remoteBootImage{Revision: 1}); err != nil {
+		t.Fatalf("empty data: %v", err)
+	}
+	if len(deck.bootImages) != 0 {
+		t.Fatalf("uploads = %d, want 0", len(deck.bootImages))
+	}
+	err := maybeUploadBootImage(deck, state, &remoteBootImage{Revision: 3, Data: "!!!not-base64!!!"})
+	if err == nil {
+		t.Fatal("bad base64 returned no error")
+	}
+	if state.bootImageRev != 0 {
+		t.Fatalf("failed upload advanced revision to %d", state.bootImageRev)
+	}
+}
+
+func encodeTestPNG(width, height int) []byte {
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{R: 0x55, G: 0x76, B: 0x4a, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
 }

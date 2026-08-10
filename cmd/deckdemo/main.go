@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -43,11 +45,17 @@ type demoState struct {
 	// revision-2 bridge mode: the controller owns all state and semantics. The deck is
 	// a pure renderer - it paints exactly what the server sends (GET poll and
 	// POST acks) and never interprets a key/dial/flick meaning locally.
-	bridge      bool
-	activeKey   *remoteKey
-	activeStrip *remoteStrip
-	background  []remoteKey
-	pollMS      int
+	bridge       bool
+	activeKey    *remoteKey
+	activeStrip  *remoteStrip
+	background   []remoteKey
+	pollMS       int
+	bootImageRev int
+}
+
+// bootImageDeck is implemented by devices that can persist a power-on frame.
+type bootImageDeck interface {
+	UploadBootImage(image.Image) error
 }
 
 // pollResult carries one bridge-mode poll response from the background poller
@@ -185,6 +193,12 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		}
 		if setupErr == nil {
 			setupErr = restoreDemo(deck, state, info.Model)
+		}
+		if setupErr == nil {
+			// controller-owned boot frame: upload on revision change (non-fatal).
+			if bootErr := maybeUploadBootImage(deck, state, remote.BootImage); bootErr != nil {
+				log.Printf("boot image error=%q", bootErr)
+			}
 		}
 		if setupErr != nil {
 			log.Printf("device setup failed retry=%s error=%q", retryInterval, setupErr)
@@ -391,6 +405,9 @@ func handlePoll(deck demoDeck, state *demoState, model streamdeck.Model, demo re
 	state.remoteLast = ""
 	if demo.LastEvent != nil {
 		state.remoteLast = lastEventMessage(demo.LastEvent.Summary)
+	}
+	if err := maybeUploadBootImage(deck, state, demo.BootImage); err != nil {
+		log.Printf("boot image error=%q", err)
 	}
 	if err := renderStrip(deck, state, model); err != nil {
 		return err
@@ -690,6 +707,33 @@ func renderBackgroundKeys(deck demoDeck, state *demoState, model streamdeck.Mode
 		}
 	}
 	log.Printf("persisted %d background key frames for next boot", model.KeyCount())
+	return nil
+}
+
+// maybeUploadBootImage persists a server-provided power-on frame when its
+// revision is new. Non-fatal: failures are logged and the previous frame
+// remains.
+func maybeUploadBootImage(deck demoDeck, state *demoState, boot *remoteBootImage) error {
+	if boot == nil || boot.Revision == state.bootImageRev || boot.Data == "" {
+		return nil
+	}
+	uploader, ok := deck.(bootImageDeck)
+	if !ok {
+		return fmt.Errorf("device does not support boot image upload")
+	}
+	raw, err := base64.StdEncoding.DecodeString(boot.Data)
+	if err != nil {
+		return fmt.Errorf("decode boot image: %w", err)
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("decode boot image: %w", err)
+	}
+	if err := uploader.UploadBootImage(img); err != nil {
+		return fmt.Errorf("upload boot image: %w", err)
+	}
+	state.bootImageRev = boot.Revision
+	log.Printf("boot image persisted revision=%d source=%dx%d", boot.Revision, img.Bounds().Dx(), img.Bounds().Dy())
 	return nil
 }
 

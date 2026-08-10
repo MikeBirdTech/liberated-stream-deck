@@ -32,6 +32,7 @@ type remoteDemo struct {
 	Key        *remoteKey        `json:"key"`
 	Strip      *remoteStrip      `json:"strip"`
 	Background *remoteBackground `json:"background"`
+	BootImage  *remoteBootImage  `json:"boot_image"`
 	PollMS     int               `json:"poll_ms"`
 	EventsSeen int               `json:"events_seen"`
 	LastEvent  *struct {
@@ -66,6 +67,15 @@ type remoteStrip struct {
 // repaints them to make the next power-on display controller-owned.
 type remoteBackground struct {
 	Keys []remoteKey `json:"keys"`
+}
+
+// remoteBootImage is an optional server-provided power-on frame. the controller
+// increments Revision to trigger a (re)upload; Data is a base64-encoded PNG or
+// JPEG of any size - the deck scales it to 800x480 and persists it on-device
+// via the undocumented 0x09 upload, so it shows at the next power-on.
+type remoteBootImage struct {
+	Revision int    `json:"revision"`
+	Data     string `json:"data_b64"`
 }
 
 // remoteState is the state object returned on event acks. Its key/strip shapes
