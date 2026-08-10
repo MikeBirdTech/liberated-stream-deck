@@ -106,6 +106,42 @@ Mini controls:
 
 Demo indexing is one-based in labels and logs. Stop the demo with Control-C.
 
+### Remote presentation
+
+`deckdemo` is remote-commanded. On every connection it fetches
+`http://controller:9999/api/controller` and only draws to the deck
+while that endpoint answers `command=run_hardware_demo`, adopting the server's
+theme, title, message, and brightness. If the endpoint is unreachable or
+answers any other command (for example `run_bridge`), the demo skips
+rendering, logs `device setup failed ... retry=1s`, and stays dark until the
+server cooperates. This is intentional gating so an external controller
+decides what the deck shows; it also means a standalone `deckdemo` run needs
+that service on `controller:9999` to draw anything.
+
+If both a Plus and a Mini are attached, the demo connects the Plus first
+(`OpenAny` preference); a targeted run for the other model uses `OpenModel`.
+
+## Install (macOS launchd agent)
+
+One command turns a fresh clone into a long-running daemon that renders and
+drives a connected deck, surviving logout and reboots:
+
+```bash
+bash install/macos/install.sh          # build + install + launch (RunAtLoad, KeepAlive)
+bash install/macos/install.sh status   # current launchd + process + log state
+bash install/macos/install.sh uninstall
+```
+
+The agent's launchd label is `com.mikebirdtech.liberated-stream-deck`. It runs
+`bin/deckdemo` from the checkout with logs under
+`~/Library/Logs/liberated-stream-deck/`.
+
+Important: `deckdemo` is remote-commanded from `controller:9999/api/controller`
+and only draws to the deck while that endpoint answers `command=run_hardware_demo`
+(see the remote presentation notes in the demo section). If that service is
+absent or answers a different command, the daemon runs but deliberately draws
+nothing. This is intentional gating, not a hang.
+
 ## Elgato application conflict
 
 On the physically tested Mac, the Elgato Stream Deck application could coexist
