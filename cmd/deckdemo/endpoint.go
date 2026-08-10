@@ -29,10 +29,11 @@ type remoteDemo struct {
 		Message    string `json:"message"`
 		Brightness int    `json:"brightness"`
 	} `json:"presentation"`
-	Key        *remoteKey   `json:"key"`
-	Strip      *remoteStrip `json:"strip"`
-	PollMS     int          `json:"poll_ms"`
-	EventsSeen int          `json:"events_seen"`
+	Key        *remoteKey        `json:"key"`
+	Strip      *remoteStrip      `json:"strip"`
+	Background *remoteBackground `json:"background"`
+	PollMS     int               `json:"poll_ms"`
+	EventsSeen int               `json:"events_seen"`
 	LastEvent  *struct {
 		Summary string `json:"summary"`
 	} `json:"last_event"`
@@ -57,6 +58,14 @@ type remoteStrip struct {
 	Pages int      `json:"pages"`
 	Title string   `json:"title"`
 	Lines []string `json:"lines"`
+}
+
+// remoteBackground is the optional server-owned frame set for all keys. Keys
+// not covered by the active key render these frames (previous default: quiet
+// paper). Rendering them persists them in the device, so a clean shutdown
+// repaints them to make the next power-on display controller-owned.
+type remoteBackground struct {
+	Keys []remoteKey `json:"keys"`
 }
 
 // remoteState is the state object returned on event acks. Its key/strip shapes

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/MikeBirdTech/liberated-stream-deck/internal/render"
@@ -45,6 +46,7 @@ type demoState struct {
 	bridge      bool
 	activeKey   *remoteKey
 	activeStrip *remoteStrip
+	background  []remoteKey
 	pollMS      int
 }
 
@@ -130,7 +132,10 @@ func main() {
 }
 
 func run() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// SIGINT (terminal) and SIGTERM (launchd bootout / logout / reboot) both
+	// count as a clean shutdown so the server background can be persisted to
+	// the device before exit.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	state := demoState{brightness: 70}
@@ -200,9 +205,9 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		log.Printf("demo endpoint connected revision=%d mode=%s theme=%q events_seen=%d", remote.Revision, mode, remote.Presentation.Theme, remote.EventsSeen)
 		log.Printf("device connected vid=%04x pid=%04x product=%q model=%q", info.VendorID, info.ProductID, info.Product, info.Model)
 		if state.bridge && state.activeKey != nil && state.activeStrip != nil {
-			log.Printf("bridge view key[%d]=%q state=%q strip=%q page=%d/%d poll_ms=%d",
+			log.Printf("bridge view key[%d]=%q state=%q strip=%q page=%d/%d poll_ms=%d background_keys=%d",
 				state.activeKey.Index, state.activeKey.Label, state.activeKey.State,
-				state.activeStrip.Title, state.activeStrip.Page, state.activeStrip.Pages, state.pollMS)
+				state.activeStrip.Title, state.activeStrip.Page, state.activeStrip.Pages, state.pollMS, len(state.background))
 		}
 		if info.Model.HasTouchStrip() {
 			log.Printf("output restored keys=1-8 strip=800x100 brightness=%d", state.brightness)
@@ -212,6 +217,14 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		}
 
 		connectionErr := runConnected(ctx, deck, state, info.Model, fetchDemo)
+		if ctx.Err() != nil && state.bridge {
+			// Best-effort: repaint every key from the server background so the
+			// frames persisted in the device (shown at next power-on) are
+			// controller-owned rather than whatever was last flashed.
+			if persistErr := renderBackgroundKeys(deck, state, info.Model); persistErr != nil {
+				log.Printf("background persist error=%q", persistErr)
+			}
+		}
 		closeErr := deck.Close()
 		if ctx.Err() != nil {
 			if closeErr != nil {
@@ -368,6 +381,11 @@ func handlePoll(deck demoDeck, state *demoState, model streamdeck.Model, demo re
 		state.activeKey = demo.Key
 		state.activeStrip = demo.Strip
 		state.pollMS = demo.PollMS
+		if demo.Background != nil {
+			state.background = demo.Background.Keys
+		} else {
+			state.background = nil
+		}
 	}
 	state.remoteEventsSeen = demo.EventsSeen
 	state.remoteLast = ""
@@ -451,6 +469,13 @@ func applyRemoteDemo(state *demoState, demo remoteDemo) error {
 		state.activeKey = demo.Key
 		state.activeStrip = demo.Strip
 		state.pollMS = demo.PollMS
+		if demo.Background != nil {
+			state.background = demo.Background.Keys
+		} else {
+			// A response without a background means quiet paper; never render
+			// stale frames from an earlier response.
+			state.background = nil
+		}
 		if demo.Presentation.Brightness > 0 {
 			state.brightness = demo.Presentation.Brightness
 		}
@@ -460,6 +485,7 @@ func applyRemoteDemo(state *demoState, demo remoteDemo) error {
 	state.bridge = false
 	state.activeKey = nil
 	state.activeStrip = nil
+	state.background = nil
 	state.pollMS = 0
 	if demo.Presentation.Brightness > 0 {
 		state.brightness = demo.Presentation.Brightness
@@ -571,12 +597,16 @@ func renderKey(deck demoDeck, state *demoState, model streamdeck.Model, index in
 	view := render.KeyView{}
 	if state.bridge {
 		// Pure renderer: paint exactly what the server sent. The active key
-		// carries its wire label and colors; every other key is quiet paper
-		// with no label.
+		// carries its wire label and colors; every other key paints the
+		// server background frame for its index, or quiet paper when the
+		// server provides none.
 		view.Index = index
 		if state.activeKey != nil && state.activeKey.Index == index {
 			view.Label = state.activeKey.Label
 			view.BG, view.FG = keyRenderColors(state.activeKey)
+		} else if frame := backgroundFrame(state.background, index); frame != nil {
+			view.Label = frame.Label
+			view.BG, view.FG = keyRenderColors(frame)
 		} else {
 			view.BG = bridgePaperBG
 		}
@@ -627,6 +657,39 @@ func renderStrip(deck demoDeck, state *demoState, model streamdeck.Model) error 
 	if err := stripDeck.SetTouchStripImage(img); err != nil {
 		return fmt.Errorf("render touch strip: %w", err)
 	}
+	return nil
+}
+
+// backgroundFrame returns the server background frame for a key index, if any.
+func backgroundFrame(frames []remoteKey, index int) *remoteKey {
+	for i := range frames {
+		if frames[i].Index == index {
+			return &frames[i]
+		}
+	}
+	return nil
+}
+
+// renderBackgroundKeys repaints every key from the server background (or quiet
+// paper when absent) and restores brightness. Used at clean shutdown so the
+// frames persisted in the device are controller-owned at the next power-on.
+func renderBackgroundKeys(deck demoDeck, state *demoState, model streamdeck.Model) error {
+	if err := deck.SetBrightness(state.brightness); err != nil {
+		return fmt.Errorf("persist background brightness: %w", err)
+	}
+	width, height := model.KeyImageSize()
+	for index := 0; index < model.KeyCount(); index++ {
+		view := render.KeyView{Index: index, BG: bridgePaperBG}
+		if frame := backgroundFrame(state.background, index); frame != nil {
+			view.Label = frame.Label
+			view.BG, view.FG = keyRenderColors(frame)
+		}
+		img := render.KeySize(view, width, height)
+		if err := deck.SetKeyImage(index, img); err != nil {
+			return fmt.Errorf("persist background key %d: %w", index+1, err)
+		}
+	}
+	log.Printf("persisted %d background key frames for next boot", model.KeyCount())
 	return nil
 }
 

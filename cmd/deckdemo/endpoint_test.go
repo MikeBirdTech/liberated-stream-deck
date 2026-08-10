@@ -243,3 +243,37 @@ func TestPostEventAckCarriesServerState(t *testing.T) {
 		t.Fatalf("ack strip lines = %v", ack.State.Strip.Lines)
 	}
 }
+
+func TestFetchRemoteDemoParsesBackgroundFrames(t *testing.T) {
+	client := testHTTPClient(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{
+			"command":"run_hardware_demo",
+			"revision":2,
+			"presentation":{"theme":"paper","title":"Demo Garden","message":"Demo link established","brightness":70},
+			"key":{"index":0,"id":"demo_task","label":"Demo Task","state":"idle","bg":"#F6F5EE","fg":"#272C24"},
+			"strip":{"page":0,"pages":3,"title":"Today","lines":["Demo Task: idle"]},
+			"background":{"keys":[
+				{"index":1,"label":"Pi 4","bg":"#272C24","fg":"#F6F5EE"},
+				{"index":2,"label":"Pi Zero","bg":"#272C24","fg":"#F6F5EE"}
+			]},
+			"poll_ms":5000,
+			"events_seen":3,
+			"last_event":null
+		}`), nil
+	})
+
+	demo, err := fetchRemoteDemo(context.Background(), client, "http://playground.test/demo")
+	if err != nil {
+		t.Fatalf("fetchRemoteDemo: %v", err)
+	}
+	if demo.Background == nil || len(demo.Background.Keys) != 2 {
+		t.Fatalf("background = %+v", demo.Background)
+	}
+	if demo.Background.Keys[0].Index != 1 || demo.Background.Keys[0].Label != "Pi 4" ||
+		demo.Background.Keys[0].BG != "#272C24" || demo.Background.Keys[0].FG != "#F6F5EE" {
+		t.Fatalf("background key 0 = %+v", demo.Background.Keys[0])
+	}
+	if demo.Background.Keys[1].Index != 2 || demo.Background.Keys[1].Label != "Pi Zero" {
+		t.Fatalf("background key 1 = %+v", demo.Background.Keys[1])
+	}
+}

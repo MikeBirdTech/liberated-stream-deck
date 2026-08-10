@@ -467,3 +467,109 @@ func TestBridgePollLoopFollowsServerCadence(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+func TestApplyRemoteDemoAdoptsBackground(t *testing.T) {
+	base := remoteDemo{Command: "run_hardware_demo", Revision: 2, PollMS: 5000,
+		Key:   &remoteKey{Index: 0, Label: "Demo Task"},
+		Strip: &remoteStrip{Page: 0, Pages: 3, Title: "Today"},
+	}
+	t.Run("background present is adopted", func(t *testing.T) {
+		demo := base
+		demo.Background = &remoteBackground{Keys: []remoteKey{
+			{Index: 1, Label: "Pi 4", BG: "#272C24", FG: "#F6F5EE"},
+		}}
+		state := &demoState{brightness: 70, bridge: false}
+		if err := applyRemoteDemo(state, demo); err != nil {
+			t.Fatalf("applyRemoteDemo: %v", err)
+		}
+		if !state.bridge {
+			t.Fatal("bridge not entered")
+		}
+		if len(state.background) != 1 || state.background[0].Label != "Pi 4" {
+			t.Fatalf("background = %+v", state.background)
+		}
+	})
+	t.Run("background absent keeps bridge with quiet default", func(t *testing.T) {
+		state := &demoState{brightness: 70, background: []remoteKey{{Index: 1, Label: "stale"}}}
+		if err := applyRemoteDemo(state, base); err != nil {
+			t.Fatalf("applyRemoteDemo: %v", err)
+		}
+		if !state.bridge {
+			t.Fatal("bridge not entered")
+		}
+		if len(state.background) != 0 {
+			t.Fatalf("background not cleared: %+v", state.background)
+		}
+	})
+	t.Run("rev1 ignores background", func(t *testing.T) {
+		demo := base
+		demo.Revision = 1
+		demo.Background = &remoteBackground{Keys: []remoteKey{{Index: 1, Label: "Pi 4"}}}
+		state := &demoState{brightness: 70, background: []remoteKey{{Index: 1, Label: "old"}}}
+		if err := applyRemoteDemo(state, demo); err != nil {
+			t.Fatalf("applyRemoteDemo: %v", err)
+		}
+		if state.bridge || len(state.background) != 0 {
+			t.Fatalf("rev1 kept background: bridge=%t background=%+v", state.bridge, state.background)
+		}
+	})
+}
+
+func TestBridgeRestoreRendersBackgroundFrames(t *testing.T) {
+	state := &demoState{
+		brightness:  70,
+		bridge:      true,
+		activeKey:   &remoteKey{Index: 0, Label: "Demo Task", State: "idle", BG: "#F6F5EE", FG: "#272C24"},
+		activeStrip: &remoteStrip{Page: 0, Pages: 3, Title: "Today", Lines: []string{"Demo Task: idle"}},
+		background: []remoteKey{
+			{Index: 1, Label: "Pi 4", BG: "#272C24", FG: "#F6F5EE"},
+			{Index: 2, Label: "Pi Zero", BG: "#272C24", FG: "#F6F5EE"},
+		},
+	}
+	deck := newFakeDemoDeck()
+	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
+		t.Fatalf("restoreDemo: %v", err)
+	}
+
+	wantActive := render.KeySize(render.KeyView{Index: 0, Label: "Demo Task", BG: bridgePaperBG, FG: bridgePaperInk}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[0], wantActive, "active key wins")
+
+	wantBG1 := render.KeySize(render.KeyView{Index: 1, Label: "Pi 4", BG: bridgePaperInk, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[1], wantBG1, "background frame key 1")
+
+	wantBG2 := render.KeySize(render.KeyView{Index: 2, Label: "Pi Zero", BG: bridgePaperInk, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[2], wantBG2, "background frame key 2")
+
+	wantQuiet := render.KeySize(render.KeyView{Index: 3, BG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[3], wantQuiet, "uncovered key stays quiet paper")
+}
+
+func TestRenderBackgroundKeysPersistsEveryKey(t *testing.T) {
+	moss := color.NRGBA{R: 0x55, G: 0x76, B: 0x4a, A: 255} // #55764A
+	state := &demoState{
+		brightness: 65,
+		bridge:     true,
+		background: []remoteKey{
+			{Index: 0, Label: "Idle", BG: "#55764A", FG: "#F6F5EE"},
+			{Index: 7, Label: "Rack", BG: "#272C24", FG: "#F6F5EE"},
+		},
+	}
+	deck := newFakeDemoDeck()
+	if err := renderBackgroundKeys(deck, state, streamdeck.ModelPlus); err != nil {
+		t.Fatalf("renderBackgroundKeys: %v", err)
+	}
+	if len(deck.brightnessCalls) != 1 || deck.brightnessCalls[0] != 65 {
+		t.Fatalf("brightness calls = %v, want [65]", deck.brightnessCalls)
+	}
+	if len(deck.keyImages) != streamdeck.KeyCount {
+		t.Fatalf("keys = %d, want %d", len(deck.keyImages), streamdeck.KeyCount)
+	}
+	want0 := render.KeySize(render.KeyView{Index: 0, Label: "Idle", BG: moss, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[0], want0, "background key 0")
+
+	want7 := render.KeySize(render.KeyView{Index: 7, Label: "Rack", BG: bridgePaperInk, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[7], want7, "background key 7")
+
+	wantQuiet := render.KeySize(render.KeyView{Index: 4, BG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[4], wantQuiet, "uncovered key quiet paper")
+}

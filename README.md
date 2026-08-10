@@ -118,6 +118,11 @@ Demo indexing is one-based in labels and logs. Stop the demo with Control-C.
   each event ack's `state` object and from periodic GETs on the
   server-chosen `poll_ms` cadence. Page position and key colors are always
   server-derived; the deck never interprets what a key/dial/flick means.
+- The optional `background` object defines full-key idle frames (same
+  label/bg/fg shape as `key`, one entry per index). Keys outside the active
+  key render these frames instead of quiet paper, and a clean shutdown
+  (SIGINT or SIGTERM) repaints every key to them, so the frames persisted in
+  the device - what the unit shows at its next power-on - are controller-owned.
 - revision < 2, or a missing bridge section, keeps the classic rev-1 local
   demo behavior.
 - If the endpoint is unreachable, times out, or returns an unreadable body,
