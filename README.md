@@ -121,8 +121,11 @@ Demo indexing is one-based in labels and logs. Stop the demo with Control-C.
 - The optional `background` object defines full-key idle frames (same
   label/bg/fg shape as `key`, one entry per index). Keys outside the active
   key render these frames instead of quiet paper, and a clean shutdown
-  (SIGINT or SIGTERM) repaints every key to them, so the frames persisted in
-  the device - what the unit shows at its next power-on - are controller-owned.
+  (SIGINT or SIGTERM) repaints every key to them. Note: repainting only
+  updates the live display - key-frame writes do NOT survive a power cycle
+  on the tested Plus firmware (verified 2026-08-10); the image shown at
+  power-on is whatever device flash contains, only written by the official
+  Elgato software.
 - revision < 2, or a missing bridge section, keeps the classic rev-1 local
   demo behavior.
 - If the endpoint is unreachable, times out, or returns an unreadable body,
