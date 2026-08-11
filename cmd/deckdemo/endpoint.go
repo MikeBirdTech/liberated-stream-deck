@@ -14,8 +14,12 @@ import (
 )
 
 const (
-	demoEndpointURL  = "http://controller:9999/api/controller"
-	eventEndpointURL = "http://controller:9999/api/controller/event"
+	// controllerEndpointURL and controllerEventURL point at the local
+	// companion controller that remote-commands the deck (HTTP/JSON, see the
+	// README's remote presentation section). The paths are environment
+	// specific and are not part of this repository's public contract.
+	controllerEndpointURL = "http://controller:9999/api/controller"
+	controllerEventURL    = "http://controller:9999/api/controller/event"
 )
 
 var demoHTTPClient = &http.Client{Timeout: time.Second}
@@ -64,7 +68,7 @@ type remoteStrip struct {
 // remoteBackground is the optional server-owned frame set for all keys. Keys
 // not covered by the active key render these frames (previous default: quiet
 // paper). Rendering them persists them in the device, so a clean shutdown
-// repaints them to make the next power-on display controller-owned.
+// repaints them to make the next power-on display the controller-owned.
 type remoteBackground struct {
 	Keys []remoteKey `json:"keys"`
 }
@@ -148,7 +152,7 @@ func remoteEvent(event streamdeck.Event) (map[string]any, bool) {
 
 func postEventAsync(ctx context.Context, payload map[string]any, results chan<- eventPostResult) {
 	go func() {
-		ack, err := postEvent(ctx, demoHTTPClient, eventEndpointURL, payload)
+		ack, err := postEvent(ctx, demoHTTPClient, controllerEventURL, payload)
 		select {
 		case results <- eventPostResult{ack: ack, err: err}:
 		case <-ctx.Done():

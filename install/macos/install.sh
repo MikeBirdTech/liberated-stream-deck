@@ -12,8 +12,8 @@
 #   4. waits briefly and prints the launchd state + daemon log tail
 #
 # Paths are derived from this script's location, so it works from any clone
-# under any username. The deck will NOT be drawn unless the daemon it talks to
-# at controller:9999 answers "run_hardware_demo" (see the README), so install
+# under any username. The deck will NOT be drawn unless the daemon's remote
+# controller answers "run_hardware_demo" (see the README), so install
 # works headless too; rendering is a separate concern.
 
 set -euo pipefail

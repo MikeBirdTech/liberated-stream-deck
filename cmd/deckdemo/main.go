@@ -152,7 +152,7 @@ func run() error {
 		&state,
 		func() (demoDeck, error) { return streamdeck.OpenAny() },
 		func(ctx context.Context) (remoteDemo, error) {
-			return fetchRemoteDemo(ctx, demoHTTPClient, demoEndpointURL)
+			return fetchRemoteDemo(ctx, demoHTTPClient, controllerEndpointURL)
 		},
 		reconnectInterval,
 	)
@@ -195,7 +195,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 			setupErr = restoreDemo(deck, state, info.Model)
 		}
 		if setupErr == nil {
-			// controller-owned boot frame: upload on revision change (non-fatal).
+			// the controller-owned boot frame: upload on revision change (non-fatal).
 			if bootErr := maybeUploadBootImage(deck, state, remote.BootImage); bootErr != nil {
 				log.Printf("boot image error=%q", bootErr)
 			}
@@ -234,7 +234,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		if ctx.Err() != nil && state.bridge {
 			// Best-effort: repaint every key from the server background so the
 			// frames persisted in the device (shown at next power-on) are
-			// controller-owned rather than whatever was last flashed.
+			// the controller-owned rather than whatever was last flashed.
 			if persistErr := renderBackgroundKeys(deck, state, info.Model); persistErr != nil {
 				log.Printf("background persist error=%q", persistErr)
 			}
@@ -689,7 +689,7 @@ func backgroundFrame(frames []remoteKey, index int) *remoteKey {
 
 // renderBackgroundKeys repaints every key from the server background (or quiet
 // paper when absent) and restores brightness. Used at clean shutdown so the
-// frames persisted in the device are controller-owned at the next power-on.
+// frames persisted in the device are the controller-owned at the next power-on.
 func renderBackgroundKeys(deck demoDeck, state *demoState, model streamdeck.Model) error {
 	if err := deck.SetBrightness(state.brightness); err != nil {
 		return fmt.Errorf("persist background brightness: %w", err)

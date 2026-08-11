@@ -122,7 +122,7 @@ Demo indexing is one-based in labels and logs. Stop the demo with Control-C.
 
 ### Remote presentation
 
-`deckdemo` is remote-commanded from `http://controller:9999/api/controller`.
+`deckdemo` can be remote-commanded by a local companion controller over HTTP.
 
 - revision 2 selects **bridge mode**: the controller owns all state and semantics and
   the deck is a pure renderer. It paints the server-provided key (label plus
@@ -176,9 +176,9 @@ The agent's launchd label is `com.mikebirdtech.liberated-stream-deck`. It runs
 `bin/deckdemo` from the checkout with logs under
 `~/Library/Logs/liberated-stream-deck/`.
 
-Note: `deckdemo` is remote-commanded from `controller:9999/api/controller`;
-revision 2 runs in bridge mode (see the remote presentation notes in the demo
-section). Any endpoint failure falls back to classic local rendering, so the
+Note: `deckdemo` is remote-commanded by a local companion controller over
+HTTP; revision 2 runs in bridge mode (see the remote presentation notes in
+the demo section). Any endpoint failure falls back to classic local rendering, so the
 deck is never left dark.
 
 ## Elgato application conflict
