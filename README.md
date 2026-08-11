@@ -313,18 +313,18 @@ normal client pacing, but sustained rapid-fire writes have a limit that was
 measured on the real deck (2026-08-11). Verified clean: continuous fills for
 60 seconds at every tested pace from 0.5/s to 5/s (up to 300 consecutive
 fills), and 30 repetitions of a 10-fill burst at 100 ms cadence followed by
-five seconds of idle (300 fills total). Observed wedge: writes issued with no
-gap at all (~128 fills in five seconds), at 100 ms cadence (~280 fills), and
-in one of two 200-250 ms-cadence runs (~180 fills); the other 200 ms run
-stayed clean for 300 fills, so the threshold varies between runs. Once
-wedged, every further `IOHIDDeviceSetReport` fails with an IOKit error -
-`0xE00002BC` (immediate, device NAK/STALL) or `0xE00002D6` (five-second I/O
-timeout). Stopping the writes lets the endpoint recover on its own: observed
-working again within about three minutes, and in one early run within
-seconds; an unplug/replug is the guaranteed recovery (verified). No permanent
-damage was seen in any test. Practical guidance: keep continuous fill pacing
-at a few per second or below and give the device idle gaps between animation
-bursts.
+five seconds of idle (300 fills total). Failure observed: with writes issued
+with no gap at all (~128 fills in five seconds), at 100 ms cadence (~280
+fills), and in one of two 200-250 ms-cadence runs (~180 fills); the other
+200 ms run stayed clean for 300 fills, so the threshold varies between runs.
+Once the endpoint stops accepting writes, every further
+`IOHIDDeviceSetReport` fails with an IOKit error - `0xE00002BC` (immediate,
+device NAK/STALL) or `0xE00002D6` (five-second I/O timeout). Stopping the
+writes lets the endpoint recover on its own: observed working again within
+about three minutes, and in one early run within seconds; an unplug/replug
+is the guaranteed recovery (verified). No permanent damage was seen in any
+test. Practical guidance: keep continuous fill pacing at a few per second or
+below and give the device idle gaps between animation bursts.
 
 One Plus compatibility detail comes from physical testing: the tested firmware
 produced TAP/PRESS-compatible reports with a 14-byte payload, including the
