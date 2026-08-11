@@ -51,6 +51,7 @@ Stream Deck Plus:
 - full-screen 800x480 LCD JPEG output (display-only)
 - whole-LCD color fill (documented setter feature report 0x03/0x05)
 - single-key color fill (documented setter feature report 0x03/0x06)
+- configurable sleep timeout (documented setter feature report 0x03/0x0D)
 - on-demand boot-logo display (documented setter feature report 0x03/0x02)
 
 Original Stream Deck Mini:
@@ -85,10 +86,12 @@ must fit inside the window. `ShowLogo()` (documented setter feature report
 immediately, without a power cycle. `FillLCD(r, g, b)` (documented setter
 feature report `0x03/0x05`) fills the entire LCD with one RGB color, and
 `FillKey(index, r, g, b)` (documented setter feature report `0x03/0x06`)
-fills a single LCD key; the fill colors are volatile. Like all documented
-image commands, the uploads are volatile: use `UploadBootImage` when the
-frame must survive a power cycle. Key, dial, and encoder indexes in the
-library are zero-based physical indexes.
+fills a single LCD key; the fill colors are volatile. `SetSleepDuration(seconds)`
+(documented setter feature report `0x03/0x0D`) sets the idle time before
+sleep in seconds (`0` disables) and is persisted on-device. Like all
+documented image commands, the uploads are volatile: use `UploadBootImage`
+when the frame must survive a power cycle. Key, dial, and encoder indexes in
+the library are zero-based physical indexes.
 
 ## Demo
 

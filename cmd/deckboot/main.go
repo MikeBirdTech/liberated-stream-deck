@@ -15,6 +15,7 @@
 //	deckboot -logo                    show the boot logo right now
 //	deckboot -filllcd 003366          fill the whole LCD with a color
 //	deckboot -fillkey 4,ff8800        fill one key (index 0-7) with a color
+//	deckboot -sleep 300               set idle time before sleep, seconds (0 disables)
 package main
 
 import (
@@ -53,13 +54,14 @@ func main() {
 	logo := flag.Bool("logo", false, "forcibly display the boot logo")
 	fillLCDHex := flag.String("filllcd", "", "fill the whole LCD with a color as RRGGBB")
 	fillKey := flag.String("fillkey", "", "fill one key with a color as <index>,<RRGGBB>")
+	sleepSeconds := flag.Int("sleep", -1, "set idle time before sleep in seconds (0 disables)")
 	flag.Parse()
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo | -filllcd <RRGGBB> | -fillkey <index>,<RRGGBB>\n")
+		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo | -filllcd <RRGGBB> | -fillkey <index>,<RRGGBB> | -sleep <seconds>\n")
 		flag.PrintDefaults()
 	}
 	selected := 0
-	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo, *fillLCDHex != "", *fillKey != ""} {
+	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo, *fillLCDHex != "", *fillKey != "", *sleepSeconds >= 0} {
 		if set {
 			selected++
 		}
@@ -69,7 +71,7 @@ func main() {
 		os.Exit(2)
 	}
 	if selected > 1 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, -logo, -filllcd, or -fillkey")
+		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, -logo, -filllcd, -fillkey, or -sleep")
 		os.Exit(2)
 	}
 
@@ -186,6 +188,14 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("key %d filled with #%02x%02x%02x (volatile)\n", fillKeyIndex, fillKeyColor[0], fillKeyColor[1], fillKeyColor[2])
+		return
+	}
+	if *sleepSeconds >= 0 {
+		if err := deck.SetSleepDuration(*sleepSeconds); err != nil {
+			fmt.Fprintln(os.Stderr, "set sleep duration:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("sleep duration set to %d s (persisted on device)\n", *sleepSeconds)
 		return
 	}
 	if *lcdPath != "" {

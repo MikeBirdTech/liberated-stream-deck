@@ -64,6 +64,10 @@ const (
 	// LCD key with one RGB color.
 	commandFillKey byte = 0x06
 
+	// commandSetSleepDuration is the setter feature-report subcommand that
+	// sets the idle duration before the device enters sleep mode.
+	commandSetSleepDuration byte = 0x0d
+
 	encoderContentButtons  byte = 0x00
 	encoderContentRotation byte = 0x01
 

@@ -50,6 +50,9 @@ func TestCloseIsIdempotentAndOperationsReturnErrClosed(t *testing.T) {
 	if err := deck.FillKey(0, 1, 2, 3); !errors.Is(err, ErrClosed) {
 		t.Fatalf("FillKey error = %v, want ErrClosed", err)
 	}
+	if err := deck.SetSleepDuration(60); !errors.Is(err, ErrClosed) {
+		t.Fatalf("SetSleepDuration error = %v, want ErrClosed", err)
+	}
 }
 
 func TestReadEventsRejectsNegativeTimeout(t *testing.T) {
