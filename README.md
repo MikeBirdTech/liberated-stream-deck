@@ -54,7 +54,7 @@ Stream Deck Plus:
 - configurable sleep timeout (documented setter feature report 0x03/0x0D)
 - diagnostic getters: firmware versions (0x04/0x05/0x07), serial (0x06),
   unit info (0x08), sleep duration (0x0A)
-- on-demand boot-logo display (documented setter feature report 0x03/0x02)
+- on-demand display of the persisted power-on frame (documented setter 0x03/0x02)
 
 Original Stream Deck Mini:
 
@@ -84,8 +84,8 @@ The concrete Plus `Deck` type still exposes `SetTouchStripImage` and
 a JPEG into any rectangular region of the 800x100 touchscreen window, using
 logical coordinates as published; the region is the image's own bounds and
 must fit inside the window. `ShowLogo()` (documented setter feature report
-`0x03/0x02`) forcibly displays the boot logo — the persisted boot frame —
-immediately, without a power cycle. `FillLCD(r, g, b)` (documented setter
+`0x03/0x02`) immediately displays the persisted power-on frame without a
+power cycle. `FillLCD(r, g, b)` (documented setter
 feature report `0x03/0x05`) fills the entire LCD with one RGB color, and
 `FillKey(index, r, g, b)` (documented setter feature report `0x03/0x06`)
 fills a single LCD key; the fill colors are volatile. `SetSleepDuration(seconds)`

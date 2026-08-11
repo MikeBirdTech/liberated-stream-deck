@@ -12,7 +12,7 @@
 //	deckboot -lcd screen.png          paint the full LCD (display-only)
 //	deckboot -partial 40,20,region.png
 //	                                  paint a region of the touch window
-//	deckboot -logo                    show the boot logo right now
+//	deckboot -logo                    show the persisted power-on frame now
 //	deckboot -filllcd 003366          fill the whole LCD with a color
 //	deckboot -fillkey 4,ff8800        fill one key (index 0-7) with a color
 //	deckboot -sleep 300               set idle time before sleep, seconds (0 disables)
@@ -110,7 +110,7 @@ func main() {
 	colorHex := flag.String("color", "", "solid color as RRGGBB")
 	lcdPath := flag.String("lcd", "", "path to a PNG/JPEG full-LCD image (display-only)")
 	partial := flag.String("partial", "x,y,file", "paint a touch-window region; X,Y top-left, PNG/JPEG file")
-	logo := flag.Bool("logo", false, "forcibly display the boot logo")
+	logo := flag.Bool("logo", false, "display the persisted power-on frame")
 	fillLCDHex := flag.String("filllcd", "", "fill the whole LCD with a color as RRGGBB")
 	fillKey := flag.String("fillkey", "", "fill one key with a color as <index>,<RRGGBB>")
 	sleepSeconds := flag.Int("sleep", -1, "set idle time before sleep in seconds (0 disables)")
@@ -226,7 +226,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "show logo:", err)
 			os.Exit(1)
 		}
-		fmt.Println("boot logo displayed")
+		fmt.Println("power-on frame displayed")
 		return
 	}
 	if *fillLCDHex != "" {
