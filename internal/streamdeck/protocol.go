@@ -56,6 +56,10 @@ const (
 	// report type.
 	commandShowLogo byte = 0x02
 
+	// commandFillLCD is the setter feature-report subcommand that fills the
+	// entire LCD with one RGB color.
+	commandFillLCD byte = 0x05
+
 	encoderContentButtons  byte = 0x00
 	encoderContentRotation byte = 0x01
 

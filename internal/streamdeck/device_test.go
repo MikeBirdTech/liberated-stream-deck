@@ -44,6 +44,9 @@ func TestCloseIsIdempotentAndOperationsReturnErrClosed(t *testing.T) {
 	if err := deck.ShowLogo(); !errors.Is(err, ErrClosed) {
 		t.Fatalf("ShowLogo error = %v, want ErrClosed", err)
 	}
+	if err := deck.FillLCD(1, 2, 3); !errors.Is(err, ErrClosed) {
+		t.Fatalf("FillLCD error = %v, want ErrClosed", err)
+	}
 }
 
 func TestReadEventsRejectsNegativeTimeout(t *testing.T) {

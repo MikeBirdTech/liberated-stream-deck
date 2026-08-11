@@ -49,6 +49,7 @@ Stream Deck Plus:
 - complete 800x100 touch-strip JPEG output
 - rectangular partial-window JPEG output (any region of the 800x100 window)
 - full-screen 800x480 LCD JPEG output (display-only)
+- whole-LCD color fill (documented setter feature report 0x03/0x05)
 - on-demand boot-logo display (documented setter feature report 0x03/0x02)
 
 Original Stream Deck Mini:
@@ -80,10 +81,11 @@ a JPEG into any rectangular region of the 800x100 touchscreen window, using
 logical coordinates as published; the region is the image's own bounds and
 must fit inside the window. `ShowLogo()` (documented setter feature report
 `0x03/0x02`) forcibly displays the boot logo — the persisted boot frame —
-immediately, without a power cycle. Like all documented image commands, the
-uploads are volatile: use `UploadBootImage` when the frame must survive a
-power cycle. Key, dial, and encoder indexes in the library are zero-based
-physical indexes.
+immediately, without a power cycle. `FillLCD(r, g, b)` (documented setter
+feature report `0x03/0x05`) fills the entire LCD with one RGB color. Like all
+documented image commands, the uploads are volatile: use `UploadBootImage`
+when the frame must survive a power cycle. Key, dial, and encoder indexes in
+the library are zero-based physical indexes.
 
 ## Demo
 
@@ -279,6 +281,24 @@ are the standard 1024-byte chunked reports but with chunk index at header
 offset +4 and chunk size at +6 (reversed compared with the documented
 commands). The payload is an 800x480 JPEG. Uploads through this channel are
 persisted on-device and rendered at the next power-on.
+
+Feature-report setters such as Fill LCD (`0x03/0x05`) are reliable at any
+normal client pacing, but sustained rapid-fire writes have a limit that was
+measured on the real deck (2026-08-11). Verified clean: continuous fills for
+60 seconds at every tested pace from 0.5/s to 5/s (up to 300 consecutive
+fills), and 30 repetitions of a 10-fill burst at 100 ms cadence followed by
+five seconds of idle (300 fills total). Observed wedge: writes issued with no
+gap at all (~128 fills in five seconds), at 100 ms cadence (~280 fills), and
+in one of two 200-250 ms-cadence runs (~180 fills); the other 200 ms run
+stayed clean for 300 fills, so the threshold varies between runs. Once
+wedged, every further `IOHIDDeviceSetReport` fails with an IOKit error -
+`0xE00002BC` (immediate, device NAK/STALL) or `0xE00002D6` (five-second I/O
+timeout). Stopping the writes lets the endpoint recover on its own: observed
+working again within about three minutes, and in one early run within
+seconds; an unplug/replug is the guaranteed recovery (verified). No permanent
+damage was seen in any test. Practical guidance: keep continuous fill pacing
+at a few per second or below and give the device idle gaps between animation
+bursts.
 
 One Plus compatibility detail comes from physical testing: the tested firmware
 produced TAP/PRESS-compatible reports with a 14-byte payload, including the

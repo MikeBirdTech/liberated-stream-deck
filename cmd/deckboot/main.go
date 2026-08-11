@@ -13,6 +13,7 @@
 //	deckboot -partial 40,20,region.png
 //	                                  paint a region of the touch window
 //	deckboot -logo                    show the boot logo right now
+//	deckboot -filllcd 003366          fill the whole LCD with a color
 package main
 
 import (
@@ -29,19 +30,34 @@ import (
 	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
 )
 
+func parseRGB(hex string) ([3]uint8, error) {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) != 6 {
+		return [3]uint8{}, fmt.Errorf("color must be RRGGBB, got %s", hex)
+	}
+	var c [3]uint8
+	for i := 0; i < 3; i++ {
+		if _, err := fmt.Sscanf(hex[i*2:i*2+2], "%02x", &c[i]); err != nil {
+			return [3]uint8{}, fmt.Errorf("parse %q: %w", hex[i*2:i*2+2], err)
+		}
+	}
+	return c, nil
+}
+
 func main() {
 	imagePath := flag.String("image", "", "path to a PNG/JPEG boot image")
 	colorHex := flag.String("color", "", "solid color as RRGGBB")
 	lcdPath := flag.String("lcd", "", "path to a PNG/JPEG full-LCD image (display-only)")
 	partial := flag.String("partial", "x,y,file", "paint a touch-window region; X,Y top-left, PNG/JPEG file")
 	logo := flag.Bool("logo", false, "forcibly display the boot logo")
+	fillLCDHex := flag.String("filllcd", "", "fill the whole LCD with a color as RRGGBB")
 	flag.Parse()
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo\n")
+		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo | -filllcd <RRGGBB>\n")
 		flag.PrintDefaults()
 	}
 	selected := 0
-	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo} {
+	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo, *fillLCDHex != ""} {
 		if set {
 			selected++
 		}
@@ -51,7 +67,7 @@ func main() {
 		os.Exit(2)
 	}
 	if selected > 1 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, or -logo")
+		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, -logo, or -filllcd")
 		os.Exit(2)
 	}
 
@@ -99,18 +115,10 @@ func main() {
 			os.Exit(1)
 		}
 	case *colorHex != "":
-		hex := strings.TrimPrefix(*colorHex, "#")
-		if len(hex) != 6 {
-			fmt.Fprintln(os.Stderr, "color must be RRGGBB, got", *colorHex)
+		c, err := parseRGB(*colorHex)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "color:", err)
 			os.Exit(2)
-		}
-		var c [3]uint8
-		for i := 0; i < 3; i++ {
-			_, err := fmt.Sscanf(hex[i*2:i*2+2], "%02x", &c[i])
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "color parse:", err)
-				os.Exit(2)
-			}
 		}
 		img = image.NewNRGBA(image.Rect(0, 0, streamdeck.BootImageWidth, streamdeck.BootImageHeight))
 		fill := color.NRGBA{R: c[0], G: c[1], B: c[2], A: 255}
@@ -134,6 +142,19 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("boot logo displayed")
+		return
+	}
+	if *fillLCDHex != "" {
+		c, err := parseRGB(*fillLCDHex)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "filllcd:", err)
+			os.Exit(2)
+		}
+		if err := deck.FillLCD(c[0], c[1], c[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "fill LCD:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("LCD filled with #%02x%02x%02x (volatile)\n", c[0], c[1], c[2])
 		return
 	}
 	if *lcdPath != "" {
