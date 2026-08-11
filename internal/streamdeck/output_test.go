@@ -439,6 +439,10 @@ func TestSetTouchStripImageRejectsShortWrite(t *testing.T) {
 type fakeHIDDevice struct {
 	writes            [][]byte
 	featureReports    [][]byte
+	getterRequests    [][]byte
+	getterResponses   map[byte][]byte
+	getterErr         error
+	shortFeatureRead  bool
 	reads             [][]byte
 	readErr           error
 	info              *hid.DeviceInfo
@@ -474,6 +478,22 @@ func (f *fakeHIDDevice) Write(report []byte) (int, error) {
 		return len(report) - 1, nil
 	}
 	return len(report), nil
+}
+
+func (f *fakeHIDDevice) GetFeatureReport(report []byte) (int, error) {
+	f.getterRequests = append(f.getterRequests, append([]byte(nil), report...))
+	if f.getterErr != nil {
+		return 0, f.getterErr
+	}
+	if f.shortFeatureRead {
+		return len(report) - 1, nil
+	}
+	response, ok := f.getterResponses[report[0]]
+	if !ok {
+		return 0, errors.New("not implemented")
+	}
+	n := copy(report, response)
+	return n, nil
 }
 
 func (f *fakeHIDDevice) GetDeviceInfo() (*hid.DeviceInfo, error) {

@@ -30,6 +30,7 @@ type hidDevice interface {
 	ReadWithTimeout([]byte, time.Duration) (int, error)
 	Write([]byte) (int, error)
 	SendFeatureReport([]byte) (int, error)
+	GetFeatureReport([]byte) (int, error)
 	GetDeviceInfo() (*hid.DeviceInfo, error)
 	Close() error
 }
@@ -278,6 +279,27 @@ func (h *hidHandle) sendFeatureReport(name string, report []byte) error {
 		return fmt.Errorf("%s: wrote %d bytes, want %d", name, n, len(report))
 	}
 	return nil
+}
+
+// getFeatureReport performs one getter control transfer on the control pipe.
+// The caller seeds the buffer's report ID; the response arrives in the same
+// buffer with the device-populated bytes.
+func (h *hidHandle) getFeatureReport(name string, report []byte) ([]byte, error) {
+	h.writeMu.Lock()
+	defer h.writeMu.Unlock()
+	h.deviceMu.RLock()
+	defer h.deviceMu.RUnlock()
+	if h.closed {
+		return nil, ErrClosed
+	}
+	n, err := h.device.GetFeatureReport(report)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if n <= 0 || n > len(report) {
+		return nil, fmt.Errorf("%s: invalid feature read length %d", name, n)
+	}
+	return report[:n], nil
 }
 
 // Close closes the Plus HID handle. It is safe to call more than once.

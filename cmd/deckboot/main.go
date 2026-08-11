@@ -16,6 +16,7 @@
 //	deckboot -filllcd 003366          fill the whole LCD with a color
 //	deckboot -fillkey 4,ff8800        fill one key (index 0-7) with a color
 //	deckboot -sleep 300               set idle time before sleep, seconds (0 disables)
+//	deckboot -info                    print firmware, serial, unit info, sleep duration
 package main
 
 import (
@@ -31,6 +32,64 @@ import (
 
 	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
 )
+
+// printGetters reads every diagnostic getter and prints the results. The
+// calls are independent: one failing getter does not stop the others.
+func printGetters(deck *streamdeck.Deck) {
+	for _, get := range []struct {
+		name string
+		fn   func() (string, error)
+	}{
+		{name: "firmware LD", fn: func() (string, error) {
+			v, err := deck.FirmwareVersionLD()
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%s (checksum 0x%08x)", v.Version, v.Checksum), nil
+		}},
+		{name: "firmware AP1", fn: func() (string, error) {
+			v, err := deck.FirmwareVersionAP1()
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%s (checksum 0x%08x)", v.Version, v.Checksum), nil
+		}},
+		{name: "firmware AP2", fn: func() (string, error) {
+			v, err := deck.FirmwareVersionAP2()
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%s (checksum 0x%08x)", v.Version, v.Checksum), nil
+		}},
+		{name: "serial", fn: deck.UnitSerialNumber},
+		{name: "sleep duration", fn: func() (string, error) {
+			s, err := deck.SleepDuration()
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("%d s", s), nil
+		}},
+	} {
+		value, err := get.fn()
+		if err != nil {
+			fmt.Printf("  %-16s ERROR: %v\n", get.name, err)
+			continue
+		}
+		fmt.Printf("  %-16s %s\n", get.name, value)
+	}
+	info, err := deck.UnitInfo()
+	if err != nil {
+		fmt.Printf("  %-16s ERROR: %v\n", "unit info", err)
+		return
+	}
+	fmt.Printf("  %-16s matrix %dx%d keys %dx%d lcd %dx%d bpp %d scheme %d gallery %d/%d demo %d\n",
+		"unit info",
+		info.MatrixRows, info.MatrixColumns,
+		info.KeyWidth, info.KeyHeight,
+		info.LCDWidth, info.LCDHeight,
+		info.ImageBPP, info.ColorScheme,
+		info.GalleryKeys, info.GalleryLCD, info.DemoFrames)
+}
 
 func parseRGB(hex string) ([3]uint8, error) {
 	hex = strings.TrimPrefix(hex, "#")
@@ -55,13 +114,14 @@ func main() {
 	fillLCDHex := flag.String("filllcd", "", "fill the whole LCD with a color as RRGGBB")
 	fillKey := flag.String("fillkey", "", "fill one key with a color as <index>,<RRGGBB>")
 	sleepSeconds := flag.Int("sleep", -1, "set idle time before sleep in seconds (0 disables)")
+	info := flag.Bool("info", false, "print diagnostic getters (firmware, serial, unit info, sleep)")
 	flag.Parse()
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo | -filllcd <RRGGBB> | -fillkey <index>,<RRGGBB> | -sleep <seconds>\n")
+		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo | -filllcd <RRGGBB> | -fillkey <index>,<RRGGBB> | -sleep <seconds> | -info\n")
 		flag.PrintDefaults()
 	}
 	selected := 0
-	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo, *fillLCDHex != "", *fillKey != "", *sleepSeconds >= 0} {
+	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo, *fillLCDHex != "", *fillKey != "", *sleepSeconds >= 0, *info} {
 		if set {
 			selected++
 		}
@@ -71,7 +131,7 @@ func main() {
 		os.Exit(2)
 	}
 	if selected > 1 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, -logo, -filllcd, -fillkey, or -sleep")
+		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, -logo, -filllcd, -fillkey, -sleep, or -info")
 		os.Exit(2)
 	}
 
@@ -196,6 +256,10 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("sleep duration set to %d s (persisted on device)\n", *sleepSeconds)
+		return
+	}
+	if *info {
+		printGetters(deck)
 		return
 	}
 	if *lcdPath != "" {
