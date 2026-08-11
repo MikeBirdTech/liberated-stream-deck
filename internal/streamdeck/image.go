@@ -17,6 +17,10 @@ func encodeTouchStripJPEG(img image.Image) ([]byte, error) {
 	return encodeExactJPEG("touch-strip", img, TouchStripWidth, TouchStripHeight)
 }
 
+func encodeLCDJPEG(img image.Image) ([]byte, error) {
+	return encodeExactJPEG("LCD", img, LCDImageWidth, LCDImageHeight)
+}
+
 func encodeExactJPEG(name string, img image.Image, width, height int) ([]byte, error) {
 	if img == nil {
 		return nil, fmt.Errorf("%s image is nil", name)

@@ -55,3 +55,36 @@ func TestEncodeTouchStripJPEGRejectsInvalidDimensions(t *testing.T) {
 		t.Fatal("wrong-size strip image returned nil error")
 	}
 }
+
+func TestEncodeLCDJPEG(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, LCDImageWidth, LCDImageHeight))
+	encoded, err := encodeLCDJPEG(img)
+	if err != nil {
+		t.Fatalf("encodeLCDJPEG: %v", err)
+	}
+	if len(encoded) < 4 || encoded[0] != 0xff || encoded[1] != 0xd8 || encoded[len(encoded)-2] != 0xff || encoded[len(encoded)-1] != 0xd9 {
+		t.Fatal("encoded bytes do not have JPEG SOI/EOI markers")
+	}
+	decoded, err := jpeg.Decode(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("decode encoded JPEG: %v", err)
+	}
+	if got := decoded.Bounds().Size(); got != (image.Point{X: LCDImageWidth, Y: LCDImageHeight}) {
+		t.Fatalf("decoded JPEG size = %v", got)
+	}
+}
+
+func TestEncodeLCDJPEGRejectsInvalidImages(t *testing.T) {
+	if _, err := encodeLCDJPEG(nil); err == nil {
+		t.Fatal("nil image returned nil error")
+	}
+	for _, size := range []image.Point{
+		{X: LCDImageWidth - 1, Y: LCDImageHeight},
+		{X: LCDImageWidth, Y: LCDImageHeight - 1},
+		{X: 1, Y: 1},
+	} {
+		if _, err := encodeLCDJPEG(image.NewNRGBA(image.Rect(0, 0, size.X, size.Y))); err == nil {
+			t.Fatalf("wrong-size %v LCD image returned nil error", size)
+		}
+	}
+}

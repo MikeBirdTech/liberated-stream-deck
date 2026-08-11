@@ -24,6 +24,10 @@ const (
 	TouchStripWidth = 800
 	// TouchStripHeight is the full touch-strip image height in pixels.
 	TouchStripHeight = 100
+	// LCDImageWidth is the full-screen LCD image width in pixels.
+	LCDImageWidth = 800
+	// LCDImageHeight is the full-screen LCD image height in pixels.
+	LCDImageHeight = 480
 
 	inputReportSize   = 512
 	outputReportSize  = 1024
@@ -33,10 +37,15 @@ const (
 	outputReportID  byte = 0x02
 	featureReportID byte = 0x03
 
-	commandKeyState         byte = 0x00
-	commandTouch            byte = 0x02
-	commandEncoder          byte = 0x03
-	commandUpdateKeyImage   byte = 0x07
+	commandKeyState       byte = 0x00
+	commandTouch          byte = 0x02
+	commandEncoder        byte = 0x03
+	commandUpdateKeyImage byte = 0x07
+	// commandUpdateLCDImage is the output-report command for a full-screen
+	// 800x480 LCD image (documented). It shares its byte value with the
+	// unrelated feature-report subcommand commandSetBrightness; the two
+	// never appear in the same report type.
+	commandUpdateLCDImage   byte = 0x08
 	commandSetBrightness    byte = 0x08
 	commandUpdateTouchStrip byte = 0x0b
 

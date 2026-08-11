@@ -105,6 +105,108 @@ func TestSetKeyImageRejectsShortWrite(t *testing.T) {
 	}
 }
 
+func TestBuildLCDImageReportsOneChunk(t *testing.T) {
+	jpegData := make([]byte, imageChunkSize)
+	jpegData[0] = 0xaa
+	jpegData[len(jpegData)-1] = 0xbb
+	reports, err := buildLCDImageReports(jpegData)
+	if err != nil {
+		t.Fatalf("buildLCDImageReports: %v", err)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("got %d reports, want 1", len(reports))
+	}
+	report := reports[0]
+	if len(report) != outputReportSize {
+		t.Fatalf("report size = %d, want %d", len(report), outputReportSize)
+	}
+	if report[0] != outputReportID || report[1] != commandUpdateLCDImage || report[2] != 0 || report[3] != 1 {
+		t.Fatalf("unexpected header bytes: % x", report[:4])
+	}
+	if got := binary.LittleEndian.Uint16(report[4:6]); got != imageChunkSize {
+		t.Fatalf("chunk size = %d, want %d", got, imageChunkSize)
+	}
+	if got := binary.LittleEndian.Uint16(report[6:8]); got != 0 {
+		t.Fatalf("chunk index = %d, want 0", got)
+	}
+	if report[8] != 0xaa || report[len(report)-1] != 0xbb {
+		t.Fatal("chunk payload was not copied to report boundaries")
+	}
+}
+
+func TestBuildLCDImageReportsMultiChunk(t *testing.T) {
+	jpegData := make([]byte, imageChunkSize*2+7)
+	jpegData[0] = 0xaa
+	jpegData[len(jpegData)-1] = 0xbb
+	reports, err := buildLCDImageReports(jpegData)
+	if err != nil {
+		t.Fatalf("buildLCDImageReports: %v", err)
+	}
+	if len(reports) != 3 {
+		t.Fatalf("reports = %d, want 3", len(reports))
+	}
+	for index, report := range reports {
+		if len(report) != outputReportSize {
+			t.Fatalf("report %d size = %d", index, len(report))
+		}
+		if report[0] != outputReportID || report[1] != commandUpdateLCDImage || report[2] != 0 {
+			t.Fatalf("report %d header = % x", index, report[:3])
+		}
+		if got := binary.LittleEndian.Uint16(report[6:8]); got != uint16(index) {
+			t.Fatalf("report %d chunk index = %d", index, got)
+		}
+	}
+	if reports[0][3] != 0 || reports[1][3] != 0 || reports[2][3] != 1 {
+		t.Fatalf("final flags = %d,%d,%d", reports[0][3], reports[1][3], reports[2][3])
+	}
+	if got := binary.LittleEndian.Uint16(reports[2][4:6]); got != 7 {
+		t.Fatalf("last size = %d, want 7", got)
+	}
+	if reports[0][imageHeaderSize] != 0xaa || reports[2][imageHeaderSize+6] != 0xbb {
+		t.Fatal("LCD payload boundaries not preserved")
+	}
+	for _, value := range reports[2][imageHeaderSize+7:] {
+		if value != 0 {
+			t.Fatal("last LCD report padding is not zero-filled")
+		}
+	}
+}
+
+func TestBuildLCDImageReportsRejectsEmptyJPEG(t *testing.T) {
+	if _, err := buildLCDImageReports(nil); err == nil {
+		t.Fatal("empty JPEG returned nil error")
+	}
+}
+
+func TestSetLCDImageWritesCompleteReports(t *testing.T) {
+	fake := &fakeHIDDevice{}
+	deck := newPlus(fake)
+	img := image.NewNRGBA(image.Rect(0, 0, LCDImageWidth, LCDImageHeight))
+	if err := deck.SetLCDImage(img); err != nil {
+		t.Fatalf("SetLCDImage: %v", err)
+	}
+	if len(fake.writes) < 2 {
+		t.Fatalf("writes = %d, want multiple chunks for an 800x480 JPEG", len(fake.writes))
+	}
+	if fake.writes[len(fake.writes)-1][3] != 1 {
+		t.Fatal("last write does not have final marker")
+	}
+	for index, report := range fake.writes {
+		if len(report) != outputReportSize {
+			t.Fatalf("write %d has %d bytes, want %d", index, len(report), outputReportSize)
+		}
+	}
+}
+
+func TestSetLCDImageRejectsShortWrite(t *testing.T) {
+	fake := &fakeHIDDevice{shortWrite: true}
+	deck := newPlus(fake)
+	img := image.NewNRGBA(image.Rect(0, 0, LCDImageWidth, LCDImageHeight))
+	if err := deck.SetLCDImage(img); err == nil {
+		t.Fatal("short HID write returned nil error")
+	}
+}
+
 func TestBuildTouchStripImageReports(t *testing.T) {
 	jpegData := make([]byte, imageChunkSize*2+7)
 	jpegData[0] = 0xaa

@@ -41,6 +41,21 @@ func (d *Deck) SetTouchStripImage(img image.Image) error {
 	return d.writeImageReports("touch strip", 0, reports)
 }
 
+// SetLCDImage encodes and uploads one exact-size full-screen LCD image. The
+// upload is display-only: unlike the boot-frame channel (command 0x09) it
+// does not survive a power cycle.
+func (d *Deck) SetLCDImage(img image.Image) error {
+	encoded, err := encodeLCDJPEG(img)
+	if err != nil {
+		return err
+	}
+	reports, err := buildLCDImageReports(encoded)
+	if err != nil {
+		return err
+	}
+	return d.writeImageReports("LCD", 0, reports)
+}
+
 func (d *Deck) writeImageReports(name string, target int, reports [][]byte) error {
 	return d.handle.writeReports(name, target, reports)
 }
@@ -58,6 +73,10 @@ func buildKeyImageReports(index int, encodedJPEG []byte) ([][]byte, error) {
 
 func buildTouchStripImageReports(encodedJPEG []byte) ([][]byte, error) {
 	return buildImageReports(commandUpdateTouchStrip, 0, "touch-strip", encodedJPEG)
+}
+
+func buildLCDImageReports(encodedJPEG []byte) ([][]byte, error) {
+	return buildImageReports(commandUpdateLCDImage, 0, "LCD", encodedJPEG)
 }
 
 func buildImageReports(command, target byte, name string, encodedJPEG []byte) ([][]byte, error) {
