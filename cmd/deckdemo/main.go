@@ -152,7 +152,12 @@ func run() error {
 		&state,
 		func() (demoDeck, error) { return streamdeck.OpenAny() },
 		func(ctx context.Context) (remoteDemo, error) {
-			return fetchRemoteDemo(ctx, demoHTTPClient, controllerEndpointURL)
+			if controllerBaseURL == "" {
+				// No remote controller configured: revision-0 payload keeps
+				// the classic rev-1 local render without any network I/O.
+				return remoteDemo{}, nil
+			}
+			return fetchRemoteDemo(ctx, demoHTTPClient, controllerBaseURL)
 		},
 		reconnectInterval,
 	)

@@ -71,6 +71,13 @@ write_plist() {
 </dict>
 </plist>
 EOF
+    if [ -n "${LIBERATED_STREAM_DECK_CONTROLLER:-}" ]; then
+        # The companion controller address is a deployment detail: it is
+        # injected into this machine's LaunchAgent plist only, never into
+        # the repository.
+        /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables dict" "$PLIST_DEST"
+        /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:LIBERATED_STREAM_DECK_CONTROLLER string '${LIBERATED_STREAM_DECK_CONTROLLER}'" "$PLIST_DEST"
+    fi
     plutil -lint "$PLIST_DEST" >/dev/null || die "plist failed lint"
     printf_ok "plist written and validated"
 }

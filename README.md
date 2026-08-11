@@ -123,6 +123,12 @@ Demo indexing is one-based in labels and logs. Stop the demo with Control-C.
 ### Remote presentation
 
 `deckdemo` can be remote-commanded by a local companion controller over HTTP.
+The controller's base URL is read from the `LIBERATED_STREAM_DECK_CONTROLLER`
+environment variable at startup; when unset (the default) the deck runs the
+classic local render without any network I/O. The address is a deployment
+detail of this machine and is intentionally never part of this repository -
+`install/macos/install.sh` injects it into the generated LaunchAgent plist
+when the variable is set at install time.
 
 - revision 2 selects **bridge mode**: the controller owns all state and semantics and
   the deck is a pure renderer. It paints the server-provided key (label plus

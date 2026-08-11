@@ -7,20 +7,29 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
 )
 
-const (
-	// controllerEndpointURL and controllerEventURL point at the local
-	// companion controller that remote-commands the deck (HTTP/JSON, see the
-	// README's remote presentation section). The paths are environment
-	// specific and are not part of this repository's public contract.
-	controllerEndpointURL = "http://controller:9999/api/controller"
-	controllerEventURL    = "http://controller:9999/api/controller/event"
+// Controller endpoint configuration. The optional companion controller that
+// remote-commands the deck is a deployment detail, never part of this
+// repository: its base URL comes from the LIBERATED_STREAM_DECK_CONTROLLER
+// environment variable at startup. Empty means no controller is configured
+// and deckdemo runs in classic local mode without any network I/O.
+var (
+	controllerBaseURL, controllerEventURL = controllerURLs()
 )
+
+func controllerURLs() (base, event string) {
+	base = strings.TrimRight(os.Getenv("LIBERATED_STREAM_DECK_CONTROLLER"), "/")
+	if base == "" {
+		return "", ""
+	}
+	return base, base + "/event"
+}
 
 var demoHTTPClient = &http.Client{Timeout: time.Second}
 
