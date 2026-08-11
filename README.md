@@ -294,11 +294,19 @@ feature report beginning `05 55 aa d1 01`. The 8191-byte image report sometimes
 called the "classic" format belongs to the 15-key Original, not PID `0x0063`.
 
 The boot-frame channel (undocumented, reverse-engineered 2026-08-10): a
-full-image upload via output command `0x09` with target byte `0x05`. Frames
-are the standard 1024-byte chunked reports but with chunk index at header
-offset +4 and chunk size at +6 (reversed compared with the documented
-commands). The payload is an 800x480 JPEG. Uploads through this channel are
-persisted on-device and rendered at the next power-on.
+full-image upload via output command `0x09`. Frames are the standard
+1024-byte chunked reports but with chunk index at header offset +4 and chunk
+size at +6 (reversed compared with the documented commands). The payload is
+an 800x480 JPEG. Uploads through this channel are persisted on-device and
+rendered at the next power-on.
+
+The type byte at report offset +2 does not select distinct stores on the
+tested firmware: every value probed (0x00 through 0x06, 2026-08-11, one
+upload per power cycle) persisted and rendered as the power-on frame, last
+upload wins. The earlier "blank boot screen" notes for targets 0x00-0x02
+were an upload-content artifact (wrong chunk header), not type-specific
+slots. `UploadBootImage` sends type 0x05; the resulting frame is what the
+documented Show Logo command displays.
 
 Feature-report setters such as Fill LCD (`0x03/0x05`) are reliable at any
 normal client pacing, but sustained rapid-fire writes have a limit that was
