@@ -37,6 +37,10 @@ func TestCloseIsIdempotentAndOperationsReturnErrClosed(t *testing.T) {
 	if err := deck.SetLCDImage(lcd); !errors.Is(err, ErrClosed) {
 		t.Fatalf("SetLCDImage error = %v, want ErrClosed", err)
 	}
+	region := image.NewNRGBA(image.Rect(0, 0, 20, 10))
+	if err := deck.SetPartialWindowImage(0, 0, region); !errors.Is(err, ErrClosed) {
+		t.Fatalf("SetPartialWindowImage error = %v, want ErrClosed", err)
+	}
 }
 
 func TestReadEventsRejectsNegativeTimeout(t *testing.T) {

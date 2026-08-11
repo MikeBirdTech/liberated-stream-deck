@@ -45,9 +45,10 @@ const (
 	// 800x480 LCD image (documented). It shares its byte value with the
 	// unrelated feature-report subcommand commandSetBrightness; the two
 	// never appear in the same report type.
-	commandUpdateLCDImage   byte = 0x08
-	commandSetBrightness    byte = 0x08
-	commandUpdateTouchStrip byte = 0x0b
+	commandUpdateLCDImage      byte = 0x08
+	commandSetBrightness       byte = 0x08
+	commandUpdateTouchStrip    byte = 0x0b
+	commandUpdatePartialWindow byte = 0x0c
 
 	encoderContentButtons  byte = 0x00
 	encoderContentRotation byte = 0x01

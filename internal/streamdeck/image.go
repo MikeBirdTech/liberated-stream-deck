@@ -21,6 +21,24 @@ func encodeLCDJPEG(img image.Image) ([]byte, error) {
 	return encodeExactJPEG("LCD", img, LCDImageWidth, LCDImageHeight)
 }
 
+// encodePartialWindowJPEG encodes a partial touchscreen-window region at its
+// natural size; the image bounds define the region dimensions.
+func encodePartialWindowJPEG(img image.Image) ([]byte, error) {
+	if img == nil {
+		return nil, fmt.Errorf("partial-window image is nil")
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 {
+		return nil, fmt.Errorf("partial-window image has empty bounds %v", bounds)
+	}
+
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, img, &jpeg.Options{Quality: imageJPEGQuality}); err != nil {
+		return nil, fmt.Errorf("encode partial-window image as JPEG: %w", err)
+	}
+	return encoded.Bytes(), nil
+}
+
 func encodeExactJPEG(name string, img image.Image, width, height int) ([]byte, error) {
 	if img == nil {
 		return nil, fmt.Errorf("%s image is nil", name)

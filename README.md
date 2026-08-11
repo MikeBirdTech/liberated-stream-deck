@@ -47,6 +47,7 @@ Stream Deck Plus:
 - all four rotary encoders and encoder buttons
 - touch-strip TAP, PRESS, and FLICK input
 - complete 800x100 touch-strip JPEG output
+- rectangular partial-window JPEG output (any region of the 800x100 window)
 - full-screen 800x480 LCD JPEG output (display-only)
 
 Original Stream Deck Mini:
@@ -73,9 +74,13 @@ identifies the connected model.
 
 The concrete Plus `Deck` type still exposes `SetTouchStripImage` and
 `SetLCDImage` (documented output command `0x08`, 800x480 JPEG, display-only).
-Like all documented image commands, the upload is volatile: use
-`UploadBootImage` when the frame must survive a power cycle. Key, dial, and
-encoder indexes in the library are zero-based physical indexes.
+`SetPartialWindowImage(x, y, img)` (documented output command `0x0C`) uploads
+a JPEG into any rectangular region of the 800x100 touchscreen window, using
+logical coordinates as published; the region is the image's own bounds and
+must fit inside the window. Like all documented image commands, the uploads
+are volatile: use `UploadBootImage` when the frame must survive a power
+cycle. Key, dial, and encoder indexes in the library are zero-based physical
+indexes.
 
 ## Demo
 

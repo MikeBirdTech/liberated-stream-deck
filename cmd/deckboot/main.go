@@ -10,6 +10,8 @@
 //	deckboot -image boot.png          upload an image (PNG/JPEG, any size)
 //	deckboot -color 5594f6            upload a solid color as RRGGBB
 //	deckboot -lcd screen.png          paint the full LCD (display-only)
+//	deckboot -partial 40,20,region.png
+//	                                  paint a region of the touch window
 package main
 
 import (
@@ -20,6 +22,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
@@ -29,13 +32,14 @@ func main() {
 	imagePath := flag.String("image", "", "path to a PNG/JPEG boot image")
 	colorHex := flag.String("color", "", "solid color as RRGGBB")
 	lcdPath := flag.String("lcd", "", "path to a PNG/JPEG full-LCD image (display-only)")
+	partial := flag.String("partial", "x,y,file", "paint a touch-window region; X,Y top-left, PNG/JPEG file")
 	flag.Parse()
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file>\n")
+		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file>\n")
 		flag.PrintDefaults()
 	}
 	selected := 0
-	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != ""} {
+	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file"} {
 		if set {
 			selected++
 		}
@@ -45,16 +49,41 @@ func main() {
 		os.Exit(2)
 	}
 	if selected > 1 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, or -lcd")
+		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, or -partial")
 		os.Exit(2)
+	}
+
+	var partialX, partialY int
+	var partialPath string
+	if *partial != "x,y,file" {
+		parts := strings.Split(*partial, ",")
+		if len(parts) != 3 {
+			fmt.Fprintln(os.Stderr, "partial must be <x>,<y>,<file>, got", *partial)
+			os.Exit(2)
+		}
+		var err error
+		partialX, err = strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil || partialX < 0 {
+			fmt.Fprintln(os.Stderr, "partial x must be a non-negative integer, got", parts[0])
+			os.Exit(2)
+		}
+		partialY, err = strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil || partialY < 0 {
+			fmt.Fprintln(os.Stderr, "partial y must be a non-negative integer, got", parts[1])
+			os.Exit(2)
+		}
+		partialPath = parts[2]
 	}
 
 	var img image.Image
 	switch {
-	case *imagePath != "" || *lcdPath != "":
+	case *imagePath != "" || *lcdPath != "" || partialPath != "":
 		path := *imagePath
 		if path == "" {
 			path = *lcdPath
+		}
+		if path == "" {
+			path = partialPath
 		}
 		f, err := os.Open(path)
 		if err != nil {
@@ -103,6 +132,14 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("full LCD painted (%dx%d source, display-only; it will not survive a power cycle)\n", img.Bounds().Dx(), img.Bounds().Dy())
+		return
+	}
+	if partialPath != "" {
+		if err := deck.SetPartialWindowImage(partialX, partialY, img); err != nil {
+			fmt.Fprintln(os.Stderr, "partial paint:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("partial window %dx%d painted at (%d,%d), display-only\n", img.Bounds().Dx(), img.Bounds().Dy(), partialX, partialY)
 		return
 	}
 	if err := deck.UploadBootImage(img); err != nil {

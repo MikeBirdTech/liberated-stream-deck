@@ -88,3 +88,30 @@ func TestEncodeLCDJPEGRejectsInvalidImages(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodePartialWindowJPEG(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 300, 60))
+	encoded, err := encodePartialWindowJPEG(img)
+	if err != nil {
+		t.Fatalf("encodePartialWindowJPEG: %v", err)
+	}
+	if len(encoded) < 4 || encoded[0] != 0xff || encoded[1] != 0xd8 || encoded[len(encoded)-2] != 0xff || encoded[len(encoded)-1] != 0xd9 {
+		t.Fatal("encoded bytes do not have JPEG SOI/EOI markers")
+	}
+	decoded, err := jpeg.Decode(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("decode encoded JPEG: %v", err)
+	}
+	if got := decoded.Bounds().Size(); got != (image.Point{X: 300, Y: 60}) {
+		t.Fatalf("decoded JPEG size = %v", got)
+	}
+}
+
+func TestEncodePartialWindowJPEGRejectsInvalidImages(t *testing.T) {
+	if _, err := encodePartialWindowJPEG(nil); err == nil {
+		t.Fatal("nil image returned nil error")
+	}
+	if _, err := encodePartialWindowJPEG(image.NewNRGBA(image.Rect(0, 0, 0, 0))); err == nil {
+		t.Fatal("empty-bounds image returned nil error")
+	}
+}
