@@ -60,6 +60,10 @@ const (
 	// entire LCD with one RGB color.
 	commandFillLCD byte = 0x05
 
+	// commandFillKey is the setter feature-report subcommand that fills one
+	// LCD key with one RGB color.
+	commandFillKey byte = 0x06
+
 	encoderContentButtons  byte = 0x00
 	encoderContentRotation byte = 0x01
 

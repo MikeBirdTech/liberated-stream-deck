@@ -14,6 +14,7 @@
 //	                                  paint a region of the touch window
 //	deckboot -logo                    show the boot logo right now
 //	deckboot -filllcd 003366          fill the whole LCD with a color
+//	deckboot -fillkey 4,ff8800        fill one key (index 0-7) with a color
 package main
 
 import (
@@ -51,13 +52,14 @@ func main() {
 	partial := flag.String("partial", "x,y,file", "paint a touch-window region; X,Y top-left, PNG/JPEG file")
 	logo := flag.Bool("logo", false, "forcibly display the boot logo")
 	fillLCDHex := flag.String("filllcd", "", "fill the whole LCD with a color as RRGGBB")
+	fillKey := flag.String("fillkey", "", "fill one key with a color as <index>,<RRGGBB>")
 	flag.Parse()
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo | -filllcd <RRGGBB>\n")
+		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo | -filllcd <RRGGBB> | -fillkey <index>,<RRGGBB>\n")
 		flag.PrintDefaults()
 	}
 	selected := 0
-	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo, *fillLCDHex != ""} {
+	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo, *fillLCDHex != "", *fillKey != ""} {
 		if set {
 			selected++
 		}
@@ -67,8 +69,29 @@ func main() {
 		os.Exit(2)
 	}
 	if selected > 1 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, -logo, or -filllcd")
+		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, -logo, -filllcd, or -fillkey")
 		os.Exit(2)
+	}
+
+	var fillKeyIndex int
+	var fillKeyColor [3]uint8
+	if *fillKey != "" {
+		parts := strings.Split(*fillKey, ",")
+		if len(parts) != 2 {
+			fmt.Fprintln(os.Stderr, "fillkey must be <index>,<RRGGBB>, got", *fillKey)
+			os.Exit(2)
+		}
+		var err error
+		fillKeyIndex, err = strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil || fillKeyIndex < 0 || fillKeyIndex >= streamdeck.KeyCount {
+			fmt.Fprintf(os.Stderr, "fillkey index must be 0..%d, got %q\n", streamdeck.KeyCount-1, parts[0])
+			os.Exit(2)
+		}
+		fillKeyColor, err = parseRGB(parts[1])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fillkey:", err)
+			os.Exit(2)
+		}
 	}
 
 	var partialX, partialY int
@@ -155,6 +178,14 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("LCD filled with #%02x%02x%02x (volatile)\n", c[0], c[1], c[2])
+		return
+	}
+	if *fillKey != "" {
+		if err := deck.FillKey(fillKeyIndex, fillKeyColor[0], fillKeyColor[1], fillKeyColor[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "fill key:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("key %d filled with #%02x%02x%02x (volatile)\n", fillKeyIndex, fillKeyColor[0], fillKeyColor[1], fillKeyColor[2])
 		return
 	}
 	if *lcdPath != "" {
