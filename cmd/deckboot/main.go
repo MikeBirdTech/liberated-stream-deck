@@ -12,6 +12,7 @@
 //	deckboot -lcd screen.png          paint the full LCD (display-only)
 //	deckboot -partial 40,20,region.png
 //	                                  paint a region of the touch window
+//	deckboot -logo                    show the boot logo right now
 package main
 
 import (
@@ -33,13 +34,14 @@ func main() {
 	colorHex := flag.String("color", "", "solid color as RRGGBB")
 	lcdPath := flag.String("lcd", "", "path to a PNG/JPEG full-LCD image (display-only)")
 	partial := flag.String("partial", "x,y,file", "paint a touch-window region; X,Y top-left, PNG/JPEG file")
+	logo := flag.Bool("logo", false, "forcibly display the boot logo")
 	flag.Parse()
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file>\n")
+		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo\n")
 		flag.PrintDefaults()
 	}
 	selected := 0
-	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file"} {
+	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo} {
 		if set {
 			selected++
 		}
@@ -49,7 +51,7 @@ func main() {
 		os.Exit(2)
 	}
 	if selected > 1 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, or -partial")
+		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, or -logo")
 		os.Exit(2)
 	}
 
@@ -126,6 +128,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer deck.Close()
+	if *logo {
+		if err := deck.ShowLogo(); err != nil {
+			fmt.Fprintln(os.Stderr, "show logo:", err)
+			os.Exit(1)
+		}
+		fmt.Println("boot logo displayed")
+		return
+	}
 	if *lcdPath != "" {
 		if err := deck.SetLCDImage(streamdeck.ScaleImage(img, streamdeck.LCDImageWidth, streamdeck.LCDImageHeight)); err != nil {
 			fmt.Fprintln(os.Stderr, "lcd paint:", err)

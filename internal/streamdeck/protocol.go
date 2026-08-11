@@ -50,6 +50,12 @@ const (
 	commandUpdateTouchStrip    byte = 0x0b
 	commandUpdatePartialWindow byte = 0x0c
 
+	// commandShowLogo is the setter feature-report subcommand that forcibly
+	// displays the boot logo. It shares its byte value with the unrelated
+	// input-report command commandTouch; the two never appear in the same
+	// report type.
+	commandShowLogo byte = 0x02
+
 	encoderContentButtons  byte = 0x00
 	encoderContentRotation byte = 0x01
 

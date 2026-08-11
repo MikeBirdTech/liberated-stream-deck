@@ -49,6 +49,7 @@ Stream Deck Plus:
 - complete 800x100 touch-strip JPEG output
 - rectangular partial-window JPEG output (any region of the 800x100 window)
 - full-screen 800x480 LCD JPEG output (display-only)
+- on-demand boot-logo display (documented setter feature report 0x03/0x02)
 
 Original Stream Deck Mini:
 
@@ -77,10 +78,12 @@ The concrete Plus `Deck` type still exposes `SetTouchStripImage` and
 `SetPartialWindowImage(x, y, img)` (documented output command `0x0C`) uploads
 a JPEG into any rectangular region of the 800x100 touchscreen window, using
 logical coordinates as published; the region is the image's own bounds and
-must fit inside the window. Like all documented image commands, the uploads
-are volatile: use `UploadBootImage` when the frame must survive a power
-cycle. Key, dial, and encoder indexes in the library are zero-based physical
-indexes.
+must fit inside the window. `ShowLogo()` (documented setter feature report
+`0x03/0x02`) forcibly displays the boot logo — the persisted boot frame —
+immediately, without a power cycle. Like all documented image commands, the
+uploads are volatile: use `UploadBootImage` when the frame must survive a
+power cycle. Key, dial, and encoder indexes in the library are zero-based
+physical indexes.
 
 ## Demo
 
