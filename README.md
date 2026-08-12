@@ -308,6 +308,14 @@ were an upload-content artifact (wrong chunk header), not type-specific
 slots. `UploadBootImage` sends type 0x05; the resulting frame is what the
 documented Show Logo command displays.
 
+> ### Do not send feature report `0x03/0x0C` (factory channel)
+> Report `0x03/0x0C` is a factory-only command channel: it executes
+> length-prefixed UTF-16 command names, and sending it (e.g. the command
+> `Open`) permanently de-provisions the unit - the stored serial is erased
+> and cannot be restored by this library, the vendor app, or a power
+> cycle. This library never sends it. See
+> `docs/protocol-undocumented-config.md` for the full mapped config layer.
+
 Feature-report setters such as Fill LCD (`0x03/0x05`) are reliable at any
 normal client pacing, but sustained rapid-fire writes have a limit that was
 measured on the real deck (2026-08-11). Verified clean: continuous fills for
