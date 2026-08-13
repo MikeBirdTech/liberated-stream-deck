@@ -213,6 +213,40 @@ func TestFetchRemoteDemoRevision2BridgeFields(t *testing.T) {
 	}
 }
 
+func TestFetchRemoteDemoParsesStripRasterFrames(t *testing.T) {
+	client := testHTTPClient(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{
+			"command":"run_hardware_demo",
+			"revision":2,
+			"key":{"index":0,"label":"Demo"},
+			"strip":{
+				"page":0,"pages":3,"title":"Today","lines":[],
+				"image":{"revision":"sha256-strip","mime_type":"image/png","data_b64":"ZnVsbA=="},
+				"regions":[{"x":17,"y":9,"revision":"sha256-region","mime_type":"image/jpeg","data_b64":"cGF0Y2g="}]
+			},
+			"poll_ms":5000
+		}`), nil
+	})
+
+	demo, err := fetchRemoteDemo(context.Background(), client, "http://playground.test/demo")
+	if err != nil {
+		t.Fatalf("fetchRemoteDemo: %v", err)
+	}
+	if demo.Strip == nil || demo.Strip.Image == nil {
+		t.Fatalf("strip image missing: %+v", demo.Strip)
+	}
+	if demo.Strip.Image.Revision != "sha256-strip" || demo.Strip.Image.MimeType != "image/png" || demo.Strip.Image.Data != "ZnVsbA==" {
+		t.Fatalf("strip image = %+v", demo.Strip.Image)
+	}
+	if len(demo.Strip.Regions) != 1 {
+		t.Fatalf("strip regions = %+v", demo.Strip.Regions)
+	}
+	region := demo.Strip.Regions[0]
+	if region.X != 17 || region.Y != 9 || region.Revision != "sha256-region" || region.MimeType != "image/jpeg" || region.Data != "cGF0Y2g=" {
+		t.Fatalf("strip region = %+v", region)
+	}
+}
+
 func TestPostEventAckCarriesServerState(t *testing.T) {
 	client := testHTTPClient(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusOK, `{
@@ -241,6 +275,35 @@ func TestPostEventAckCarriesServerState(t *testing.T) {
 	}
 	if ack.State.Strip.Lines[0] != "Demo Task: running" {
 		t.Fatalf("ack strip lines = %v", ack.State.Strip.Lines)
+	}
+}
+
+func TestPostEventAckStateCarriesStripRasterFrames(t *testing.T) {
+	client := testHTTPClient(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{
+			"ok":true,
+			"events_seen":7,
+			"message":"touch received",
+			"state":{"strip":{
+				"page":0,"pages":1,"title":"Pixels","lines":[],
+				"image":{"revision":"sha256-ack-strip","mime_type":"image/jpeg","data_b64":"ZnVsbA=="},
+				"regions":[{"x":0,"y":0,"revision":"sha256-ack-region","mime_type":"image/png","data_b64":"cGF0Y2g="}]
+			}}
+		}`), nil
+	})
+
+	ack, err := postEvent(context.Background(), client, "http://playground.test/event", map[string]any{"kind": "touch_tap", "x": 1, "y": 2})
+	if err != nil {
+		t.Fatalf("postEvent: %v", err)
+	}
+	if ack.State == nil || ack.State.Strip == nil || ack.State.Strip.Image == nil {
+		t.Fatalf("ack strip image missing: %+v", ack.State)
+	}
+	if ack.State.Strip.Image.Revision != "sha256-ack-strip" || len(ack.State.Strip.Regions) != 1 {
+		t.Fatalf("ack strip = %+v", ack.State.Strip)
+	}
+	if ack.State.Strip.Regions[0].Revision != "sha256-ack-region" {
+		t.Fatalf("ack region = %+v", ack.State.Strip.Regions[0])
 	}
 }
 

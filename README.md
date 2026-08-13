@@ -63,8 +63,9 @@ Original Stream Deck Mini:
 - rotated 24-bit BMP key output using the Mini-specific protocol
 - no dial or touch events, matching the hardware
 
-The Plus demo continues to send complete 800x100 touch-strip redraws. Partial
-strip updates remain out of scope.
+The Plus demo accepts controller-owned full 800x100 touch-strip raster frames
+and native-coordinate partial-window updates. Full and partial writes are
+revision-gated, serialized, paced, and restored safely after reconnects.
 
 ## Library API
 
@@ -159,6 +160,29 @@ when the variable is set at install time.
   pixels. If the image is absent or fails to decode, the key falls back to
   the label/bg/fg rendering, so older or image-unaware controllers and
   payloads keep working unchanged.
+- The `strip` object may carry the same optional `image` shape. A valid
+  base64 PNG/JPEG is scaled to exactly 800x100 and becomes the complete visual
+  authority: no locally rendered title, lines, counters, event text, page dots,
+  or decorations are added. Missing or invalid images retain the title/lines
+  renderer as a backward-compatible fallback. The shape is accepted from both
+  GET responses and event-ack `state.strip` objects.
+- A raster-backed `strip` may also carry `regions`, each with native `x`/`y`
+  coordinates plus `revision`, `mime_type`, and `data_b64`. The decoded image
+  dimensions define the patch size. Valid changed patches use
+  `SetPartialWindowImage`; invalid or out-of-bounds patches are ignored. Patches
+  are never applied without a valid full base frame. Removing or repositioning
+  a patch restores the base and then reapplies the authoritative remaining
+  list so stale pixels cannot survive.
+- Decoded full frames, patches, and failures are cached by revision in a
+  bounded cache. Displayed revisions are tracked per physical connection, so
+  unchanged polls and acks perform no extra touch-strip writes. Reconnects
+  invalidate only display tracking: the current full frame is restored once,
+  followed by its current patches, while decoded pixels remain cached.
+- All touch-strip output goes through one coalescing writer. It keeps only the
+  newest desired state and applies at most one operation per pacing interval;
+  `LIBERATED_STREAM_DECK_TOUCH_MIN_INTERVAL_MS` configures the interval (100 ms
+  by default). A failed operation is not marked displayed and is held back from
+  immediate retry while the normal connection recovery path runs.
 - The optional `boot_image` object (`revision` + base64-encoded PNG/JPEG)
   persists a server-chosen 800x480 power-on frame to the device. Uploads use
   the undocumented boot-frame channel (command `0x09`, target `0x05`, JPEG,
