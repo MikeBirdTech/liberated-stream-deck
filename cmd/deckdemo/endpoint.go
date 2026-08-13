@@ -55,13 +55,27 @@ type remoteDemo struct {
 
 // remoteKey is the server-owned presentation of one LCD key. State is opaque:
 // the deck never interprets it; it paints exactly the wire bg/fg and label.
+// When the optional image is present and decodable it takes precedence; the
+// label/bg/fg stay as the semantic fallback for absent or invalid images.
 type remoteKey struct {
-	Index int    `json:"index"`
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	State string `json:"state"`
-	BG    string `json:"bg"`
-	FG    string `json:"fg"`
+	Index int          `json:"index"`
+	ID    string       `json:"id"`
+	Label string       `json:"label"`
+	State string       `json:"state"`
+	BG    string       `json:"bg"`
+	FG    string       `json:"fg"`
+	Image *remoteImage `json:"image"`
+}
+
+// remoteImage is an opaque server-rendered raster frame for one key: a
+// base64-encoded PNG or JPEG that the deck scales to the native key size and
+// paints verbatim, never interpreting its contents. Revision is the server's
+// content digest and keys the decoded-frame cache; MimeType is informational
+// only (the payload format is sniffed during decode).
+type remoteImage struct {
+	Revision string `json:"revision"`
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data_b64"`
 }
 
 // remoteStrip is the server-owned presentation of the touch strip. Page, pages,
