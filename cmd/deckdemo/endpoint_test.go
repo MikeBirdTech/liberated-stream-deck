@@ -277,3 +277,71 @@ func TestFetchRemoteDemoParsesBackgroundFrames(t *testing.T) {
 		t.Fatalf("background key 1 = %+v", demo.Background.Keys[1])
 	}
 }
+
+func TestFetchRemoteDemoParsesKeyImages(t *testing.T) {
+	client := testHTTPClient(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{
+			"command":"run_hardware_demo",
+			"revision":2,
+			"presentation":{"theme":"paper","title":"Demo Garden","message":"Demo link established","brightness":70},
+			"key":{"index":0,"id":"demo_task","label":"Demo Task","state":"idle","bg":"#F6F5EE","fg":"#272C24",
+				"image":{"revision":"sha256-aaa","mime_type":"image/png","data_b64":"cGl4ZWxz"}},
+			"strip":{"page":0,"pages":3,"title":"Today","lines":["Demo Task: idle"]},
+			"background":{"keys":[
+				{"index":1,"label":"Pi 4","bg":"#272C24","fg":"#F6F5EE",
+					"image":{"revision":"sha256-bbb","mime_type":"image/jpeg","data_b64":"anBlZw=="}},
+				{"index":2,"label":"Pi Zero","bg":"#272C24","fg":"#F6F5EE"}
+			]},
+			"poll_ms":5000,
+			"events_seen":3,
+			"last_event":null
+		}`), nil
+	})
+
+	demo, err := fetchRemoteDemo(context.Background(), client, "http://playground.test/demo")
+	if err != nil {
+		t.Fatalf("fetchRemoteDemo: %v", err)
+	}
+	if demo.Key == nil || demo.Key.Image == nil {
+		t.Fatalf("key image missing: %+v", demo.Key)
+	}
+	if demo.Key.Image.Revision != "sha256-aaa" || demo.Key.Image.MimeType != "image/png" || demo.Key.Image.Data != "cGl4ZWxz" {
+		t.Fatalf("key image = %+v", demo.Key.Image)
+	}
+	// The semantic fallback rides alongside the image.
+	if demo.Key.Label != "Demo Task" || demo.Key.BG != "#F6F5EE" || demo.Key.FG != "#272C24" {
+		t.Fatalf("key fallback = %+v", demo.Key)
+	}
+	if demo.Background.Keys[0].Image == nil || demo.Background.Keys[0].Image.Revision != "sha256-bbb" {
+		t.Fatalf("background key 0 image = %+v", demo.Background.Keys[0].Image)
+	}
+	if demo.Background.Keys[1].Image != nil {
+		t.Fatalf("background key 1 image = %+v, want none", demo.Background.Keys[1].Image)
+	}
+}
+
+func TestPostEventAckStateCarriesKeyImage(t *testing.T) {
+	client := testHTTPClient(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{
+			"ok":true,
+			"events_seen":7,
+			"message":"Key 0 down received - Demo Task started",
+			"state":{
+				"key":{"index":0,"id":"demo_task","label":"Demo Task","state":"running","bg":"#6FA25C","fg":"#F6F5EE",
+					"image":{"revision":"sha256-ccc","mime_type":"image/png","data_b64":"cGl4ZWxz"}},
+				"strip":{"page":0,"pages":3,"title":"Today","lines":["Demo Task: running"]}
+			}
+		}`), nil
+	})
+
+	ack, err := postEvent(context.Background(), client, "http://playground.test/event", map[string]any{"kind": "key", "index": 0, "pressed": true})
+	if err != nil {
+		t.Fatalf("postEvent: %v", err)
+	}
+	if ack.State == nil || ack.State.Key == nil || ack.State.Key.Image == nil {
+		t.Fatalf("ack key image missing: %+v", ack.State)
+	}
+	if ack.State.Key.Image.Revision != "sha256-ccc" || ack.State.Key.Image.Data != "cGl4ZWxz" {
+		t.Fatalf("ack key image = %+v", ack.State.Key.Image)
+	}
+}

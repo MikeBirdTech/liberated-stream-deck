@@ -8,6 +8,12 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+
+	// Register the two decoders the bridge accepts for opaque raster frames
+	// (key image and boot_image payloads).
+	_ "image/jpeg"
+	_ "image/png"
+
 	"log"
 	"os"
 	"os/signal"
@@ -51,7 +57,18 @@ type demoState struct {
 	background   []remoteKey
 	pollMS       int
 	bootImageRev int
+
+	// frames caches decoded key raster frames by the server's image revision.
+	// A nil entry records a payload that failed to decode, so a broken frame
+	// is logged once instead of on every poll repaint.
+	frames map[string]image.Image
 }
+
+// frameCacheLimit bounds the decoded-frame cache. The server only references
+// a handful of live revisions at once (at most one per key), so on overflow
+// the whole cache is reset and repopulated at the cost of one re-decode per
+// visible key.
+const frameCacheLimit = 64
 
 // bootImageDeck is implemented by devices that can persist a power-on frame.
 type bootImageDeck interface {
@@ -615,31 +632,87 @@ func handleEvent(deck demoDeck, state *demoState, model streamdeck.Model, event 
 }
 
 func renderKey(deck demoDeck, state *demoState, model streamdeck.Model, index int) error {
-	width, height := model.KeyImageSize()
-	view := render.KeyView{}
 	if state.bridge {
 		// Pure renderer: paint exactly what the server sent. The active key
-		// carries its wire label and colors; every other key paints the
-		// server background frame for its index, or quiet paper when the
-		// server provides none.
-		view.Index = index
-		if state.activeKey != nil && state.activeKey.Index == index {
-			view.Label = state.activeKey.Label
-			view.BG, view.FG = keyRenderColors(state.activeKey)
-		} else if frame := backgroundFrame(state.background, index); frame != nil {
-			view.Label = frame.Label
-			view.BG, view.FG = keyRenderColors(frame)
-		} else {
-			view.BG = bridgePaperBG
+		// carries its wire frame; every other key paints the server
+		// background frame for its index, or quiet paper when the server
+		// provides none.
+		key := state.activeKey
+		if key == nil || key.Index != index {
+			key = backgroundFrame(state.background, index)
 		}
-	} else {
-		view = render.KeyView{Index: index, On: state.keys[index], Selected: index == state.selectedKey}
+		return renderWireKey(deck, state, model, index, key)
 	}
+	width, height := model.KeyImageSize()
+	view := render.KeyView{Index: index, On: state.keys[index], Selected: index == state.selectedKey}
 	img := render.KeySize(view, width, height)
 	if err := deck.SetKeyImage(index, img); err != nil {
 		return fmt.Errorf("render key %d: %w", index+1, err)
 	}
 	return nil
+}
+
+// renderWireKey paints one server-owned key. A decodable raster frame is
+// scaled to the native key size and painted verbatim; otherwise the semantic
+// label/bg/fg fallback is drawn (quiet paper when key is nil).
+func renderWireKey(deck demoDeck, state *demoState, model streamdeck.Model, index int, key *remoteKey) error {
+	width, height := model.KeyImageSize()
+	var img image.Image
+	if frame := state.imageFrame(key); frame != nil {
+		img = streamdeck.ScaleImage(frame, width, height)
+	} else {
+		view := render.KeyView{Index: index, BG: bridgePaperBG}
+		if key != nil {
+			view.Label = key.Label
+			view.BG, view.FG = keyRenderColors(key)
+		}
+		img = render.KeySize(view, width, height)
+	}
+	if err := deck.SetKeyImage(index, img); err != nil {
+		return fmt.Errorf("render key %d: %w", index+1, err)
+	}
+	return nil
+}
+
+// imageFrame returns the decoded raster frame carried by a wire key, or nil
+// when the key has no image or its payload cannot be decoded — the caller
+// then falls back to the semantic label/bg/fg rendering. Decoded frames are
+// cached by the server's content revision (including failures); a payload
+// without a revision is decoded every time rather than cached.
+func (s *demoState) imageFrame(key *remoteKey) image.Image {
+	if key == nil || key.Image == nil || key.Image.Data == "" {
+		return nil
+	}
+	revision := key.Image.Revision
+	if revision != "" {
+		if frame, cached := s.frames[revision]; cached {
+			return frame
+		}
+	}
+	frame, err := decodeImageFrame(key.Image)
+	if err != nil {
+		log.Printf("bridge key %d image ignored: %v", key.Index+1, err)
+	}
+	if revision != "" {
+		if s.frames == nil || len(s.frames) >= frameCacheLimit {
+			s.frames = make(map[string]image.Image)
+		}
+		s.frames[revision] = frame
+	}
+	return frame
+}
+
+// decodeImageFrame decodes a wire image payload (base64-encoded PNG or JPEG).
+func decodeImageFrame(img *remoteImage) (image.Image, error) {
+	raw, err := base64.StdEncoding.DecodeString(img.Data)
+	if err != nil {
+		return nil, fmt.Errorf("decode image base64: %w", err)
+	}
+	frame, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("decode image: %w", err)
+	}
+	return frame, nil
 }
 
 func renderStrip(deck demoDeck, state *demoState, model streamdeck.Model) error {
@@ -699,16 +772,9 @@ func renderBackgroundKeys(deck demoDeck, state *demoState, model streamdeck.Mode
 	if err := deck.SetBrightness(state.brightness); err != nil {
 		return fmt.Errorf("persist background brightness: %w", err)
 	}
-	width, height := model.KeyImageSize()
 	for index := 0; index < model.KeyCount(); index++ {
-		view := render.KeyView{Index: index, BG: bridgePaperBG}
-		if frame := backgroundFrame(state.background, index); frame != nil {
-			view.Label = frame.Label
-			view.BG, view.FG = keyRenderColors(frame)
-		}
-		img := render.KeySize(view, width, height)
-		if err := deck.SetKeyImage(index, img); err != nil {
-			return fmt.Errorf("persist background key %d: %w", index+1, err)
+		if err := renderWireKey(deck, state, model, index, backgroundFrame(state.background, index)); err != nil {
+			return fmt.Errorf("persist background: %w", err)
 		}
 	}
 	log.Printf("persisted %d background key frames for next boot", model.KeyCount())

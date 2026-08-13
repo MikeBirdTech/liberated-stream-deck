@@ -641,10 +641,14 @@ func TestMaybeUploadBootImageSkipsOrFails(t *testing.T) {
 }
 
 func encodeTestPNG(width, height int) []byte {
+	return encodeTestPNGColor(width, height, color.NRGBA{R: 0x55, G: 0x76, B: 0x4a, A: 255})
+}
+
+func encodeTestPNGColor(width, height int, c color.NRGBA) []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			img.SetNRGBA(x, y, color.NRGBA{R: 0x55, G: 0x76, B: 0x4a, A: 255})
+			img.SetNRGBA(x, y, c)
 		}
 	}
 	var buf bytes.Buffer
@@ -652,4 +656,134 @@ func encodeTestPNG(width, height int) []byte {
 		panic(err)
 	}
 	return buf.Bytes()
+}
+
+// testFrame builds a wire image payload: a solid-color PNG of the given size.
+func testFrame(revision string, width, height int, c color.NRGBA) *remoteImage {
+	return &remoteImage{
+		Revision: revision,
+		MimeType: "image/png",
+		Data:     base64.StdEncoding.EncodeToString(encodeTestPNGColor(width, height, c)),
+	}
+}
+
+func keyPixel(t *testing.T, deck *fakeDemoDeck, index, x, y int) color.NRGBA {
+	t.Helper()
+	img := deck.keyImages[index]
+	if img == nil {
+		t.Fatalf("key %d has no image", index)
+	}
+	return color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+}
+
+func TestBridgeRenderPaintsKeyImageFrame(t *testing.T) {
+	red := color.NRGBA{R: 0xd0, G: 0x20, B: 0x10, A: 255}
+	state := &demoState{
+		bridge: true,
+		activeKey: &remoteKey{
+			Index: 0, Label: "Start", BG: "#F6F5EE", FG: "#272C24",
+			Image: testFrame("rev-red", streamdeck.KeyImageWidth, streamdeck.KeyImageHeight, red),
+		},
+	}
+	deck := newFakeDemoDeck()
+	if err := renderKey(deck, state, streamdeck.ModelPlus, 0); err != nil {
+		t.Fatalf("renderKey: %v", err)
+	}
+	if got := keyPixel(t, deck, 0, 60, 60); got != red {
+		t.Fatalf("key 0 pixel = %#v, want image red %#v", got, red)
+	}
+	if b := deck.keyImages[0].Bounds(); b.Dx() != streamdeck.KeyImageWidth || b.Dy() != streamdeck.KeyImageHeight {
+		t.Fatalf("key 0 bounds = %v, want native %dx%d", b, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	}
+}
+
+func TestBridgeRenderScalesImageToNativeKeySize(t *testing.T) {
+	moss := color.NRGBA{R: 0x55, G: 0x76, B: 0x4a, A: 255}
+	state := &demoState{
+		bridge:    true,
+		activeKey: &remoteKey{Index: 0, Label: "Tiny", Image: testFrame("rev-tiny", 2, 2, moss)},
+	}
+	deck := newFakeDemoDeck()
+	if err := renderKey(deck, state, streamdeck.ModelPlus, 0); err != nil {
+		t.Fatalf("renderKey: %v", err)
+	}
+	if b := deck.keyImages[0].Bounds(); b.Dx() != streamdeck.KeyImageWidth || b.Dy() != streamdeck.KeyImageHeight {
+		t.Fatalf("key 0 bounds = %v, want scaled to %dx%d", b, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	}
+	if got := keyPixel(t, deck, 0, 60, 60); got != moss {
+		t.Fatalf("key 0 pixel = %#v, want scaled moss %#v", got, moss)
+	}
+}
+
+func TestBridgeRenderFallsBackOnInvalidImage(t *testing.T) {
+	state := &demoState{
+		bridge: true,
+		activeKey: &remoteKey{
+			Index: 0, Label: "Start", BG: "#F6F5EE", FG: "#272C24",
+			Image: &remoteImage{Revision: "rev-broken", MimeType: "image/png", Data: "!!!not-base64!!!"},
+		},
+	}
+	deck := newFakeDemoDeck()
+	if err := renderKey(deck, state, streamdeck.ModelPlus, 0); err != nil {
+		t.Fatalf("renderKey: %v", err)
+	}
+	want := render.KeySize(render.KeyView{Index: 0, Label: "Start", BG: bridgePaperBG, FG: bridgePaperInk}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[0], want, "semantic fallback")
+}
+
+func TestImageFrameCachesByRevision(t *testing.T) {
+	red := color.NRGBA{R: 0xd0, G: 0x20, B: 0x10, A: 255}
+	green := color.NRGBA{R: 0x10, G: 0xa0, B: 0x20, A: 255}
+	state := &demoState{}
+
+	key := &remoteKey{Index: 0, Image: testFrame("rev-1", 4, 4, red)}
+	first := state.imageFrame(key)
+	if first == nil {
+		t.Fatal("first decode returned nil")
+	}
+
+	// Same revision with different bytes must serve the cached frame: the
+	// revision is the server's content digest and is trusted as the identity.
+	key.Image = testFrame("rev-1", 4, 4, green)
+	cached := state.imageFrame(key)
+	if cached != first {
+		t.Fatal("same revision was re-decoded instead of served from cache")
+	}
+
+	key.Image = testFrame("rev-2", 4, 4, green)
+	fresh := state.imageFrame(key)
+	if fresh == nil || fresh == first {
+		t.Fatal("new revision did not decode a fresh frame")
+	}
+
+	// A failed decode is cached too, so a broken payload is not re-decoded
+	// (or re-logged) on every repaint.
+	key.Image = &remoteImage{Revision: "rev-bad", Data: "!!!not-base64!!!"}
+	if state.imageFrame(key) != nil {
+		t.Fatal("broken payload decoded to a frame")
+	}
+	key.Image = testFrame("rev-bad", 4, 4, red)
+	if state.imageFrame(key) != nil {
+		t.Fatal("cached decode failure was retried for the same revision")
+	}
+}
+
+func TestRenderBackgroundKeysPaintsImageFrames(t *testing.T) {
+	ink := color.NRGBA{R: 0x27, G: 0x2c, B: 0x24, A: 255}
+	state := &demoState{
+		brightness: 65,
+		bridge:     true,
+		background: []remoteKey{
+			{Index: 3, Label: "Rack", BG: "#F6F5EE", FG: "#272C24", Image: testFrame("rev-rack", streamdeck.KeyImageWidth, streamdeck.KeyImageHeight, ink)},
+		},
+	}
+	deck := newFakeDemoDeck()
+	if err := renderBackgroundKeys(deck, state, streamdeck.ModelPlus); err != nil {
+		t.Fatalf("renderBackgroundKeys: %v", err)
+	}
+	if got := keyPixel(t, deck, 3, 60, 60); got != ink {
+		t.Fatalf("key 3 pixel = %#v, want image ink %#v", got, ink)
+	}
+	wantQuiet := render.KeySize(render.KeyView{Index: 4, BG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[4], wantQuiet, "uncovered key quiet paper")
 }

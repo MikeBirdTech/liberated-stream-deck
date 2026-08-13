@@ -150,6 +150,15 @@ when the variable is set at install time.
   each event ack's `state` object and from periodic GETs on the
   server-chosen `poll_ms` cadence. Page position and key colors are always
   server-derived; the deck never interprets what a key/dial/flick means.
+- Any key object (the active `key`, every entry in `background.keys`, and
+  keys inside an ack's `state`) may carry an optional `image` object: a
+  server-rendered raster frame as base64 PNG/JPEG (`data_b64`), a
+  `revision` content digest, and an informational `mime_type`. The deck
+  decodes the payload, scales it to the native key size, caches the decoded
+  frame by `revision`, and paints it verbatim - it never interprets the
+  pixels. If the image is absent or fails to decode, the key falls back to
+  the label/bg/fg rendering, so older or image-unaware controllers and
+  payloads keep working unchanged.
 - The optional `boot_image` object (`revision` + base64-encoded PNG/JPEG)
   persists a server-chosen 800x480 power-on frame to the device. Uploads use
   the undocumented boot-frame channel (command `0x09`, target `0x05`, JPEG,
