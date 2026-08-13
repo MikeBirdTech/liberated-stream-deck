@@ -201,9 +201,16 @@ type fakeDemoDeck struct {
 	brightnessCalls []int
 	keyImages       map[int]image.Image
 	stripImages     []image.Image
+	stripRegions    []fakeStripRegion
 	closeCalls      int
 	onStripImage    func()
 	bootImages      []image.Image
+}
+
+type fakeStripRegion struct {
+	x   int
+	y   int
+	img image.Image
 }
 
 func newFakeDemoDeck() *fakeDemoDeck {
@@ -242,6 +249,11 @@ func (d *fakeDemoDeck) SetTouchStripImage(img image.Image) error {
 	if d.onStripImage != nil {
 		d.onStripImage()
 	}
+	return nil
+}
+
+func (d *fakeDemoDeck) SetPartialWindowImage(x, y int, img image.Image) error {
+	d.stripRegions = append(d.stripRegions, fakeStripRegion{x: x, y: y, img: img})
 	return nil
 }
 

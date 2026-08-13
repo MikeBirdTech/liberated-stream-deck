@@ -10,7 +10,7 @@ import (
 	"image/color"
 
 	// Register the two decoders the bridge accepts for opaque raster frames
-	// (key image and boot_image payloads).
+	// (key, touch-strip, region, and boot_image payloads).
 	_ "image/jpeg"
 	_ "image/png"
 
@@ -62,12 +62,14 @@ type demoState struct {
 	// A nil entry records a payload that failed to decode, so a broken frame
 	// is logged once instead of on every poll repaint.
 	frames map[string]image.Image
+
+	// stripOutput caches decoded touch-strip frames across connections while
+	// keeping desired and displayed output state serialized and connection-local.
+	stripOutput stripOutputState
 }
 
-// frameCacheLimit bounds the decoded-frame cache. The server only references
-// a handful of live revisions at once (at most one per key), so on overflow
-// the whole cache is reset and repopulated at the cost of one re-decode per
-// visible key.
+// frameCacheLimit bounds each decoded-frame cache. The key cache resets on
+// overflow; the touch-strip cache evicts its oldest revision.
 const frameCacheLimit = 64
 
 // bootImageDeck is implemented by devices that can persist a power-on frame.
@@ -141,10 +143,6 @@ type demoDeck interface {
 	Close() error
 }
 
-type touchStripDeck interface {
-	SetTouchStripImage(image.Image) error
-}
-
 type openDeckFunc func() (demoDeck, error)
 type fetchDemoFunc func(context.Context) (remoteDemo, error)
 
@@ -164,6 +162,7 @@ func run() error {
 	defer stop()
 
 	state := demoState{brightness: 70}
+	state.stripOutput.configure(touchStripMinimumInterval(), defaultTouchStripFailureDelay)
 	return runDemo(
 		ctx,
 		&state,
@@ -214,6 +213,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 			}
 		}
 		if setupErr == nil {
+			state.stripOutput.startConnection()
 			setupErr = restoreDemo(deck, state, info.Model)
 		}
 		if setupErr == nil {
@@ -297,6 +297,9 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 	for {
 		if ctx.Err() != nil {
 			return nil
+		}
+		if err := flushStrip(deck, state, model); err != nil {
+			return err
 		}
 		select {
 		case result := <-eventResults:
@@ -713,46 +716,6 @@ func decodeImageFrame(img *remoteImage) (image.Image, error) {
 		return nil, fmt.Errorf("decode image: %w", err)
 	}
 	return frame, nil
-}
-
-func renderStrip(deck demoDeck, state *demoState, model streamdeck.Model) error {
-	if !model.HasTouchStrip() {
-		return nil
-	}
-	stripDeck, ok := deck.(touchStripDeck)
-	if !ok {
-		return fmt.Errorf("%s device does not provide touch-strip output", model)
-	}
-	var view render.StripView
-	if state.bridge {
-		view = render.StripView{
-			EventsSeen: state.remoteEventsSeen,
-			LastEvent:  state.remoteLast,
-			Lines:      []string{}, // non-nil selects the bridge page
-		}
-		if state.activeStrip != nil {
-			view.Title = state.activeStrip.Title
-			view.Lines = state.activeStrip.Lines
-			view.Page = state.activeStrip.Page
-			view.Pages = state.activeStrip.Pages
-			if view.Lines == nil {
-				view.Lines = []string{}
-			}
-		}
-	} else {
-		view = render.StripView{
-			Counter: state.counter, Brightness: state.brightness,
-			SelectedKey: state.selectedKey, SelectedOn: state.keys[state.selectedKey],
-			Mode: displayModes[state.mode], LastInput: state.latestInput, Touch: state.latestTouch,
-			Theme: state.remoteTheme, Title: state.remoteTitle, Message: state.remoteMessage,
-			EventsSeen: state.remoteEventsSeen, LastEvent: state.remoteLast,
-		}
-	}
-	img := render.Strip(view)
-	if err := stripDeck.SetTouchStripImage(img); err != nil {
-		return fmt.Errorf("render touch strip: %w", err)
-	}
-	return nil
 }
 
 // backgroundFrame returns the server background frame for a key index, if any.

@@ -78,14 +78,25 @@ type remoteImage struct {
 	Data     string `json:"data_b64"`
 }
 
-// remoteStrip is the server-owned presentation of the touch strip. Page, pages,
-// title, and lines are all server-authoritative; the deck never derives any of
-// them locally.
+// remoteStrip is the server-owned presentation of the touch strip. A valid
+// image is the complete base frame and takes precedence over the semantic
+// title/lines fallback. Regions are native-coordinate patches layered over a
+// valid base frame in list order.
 type remoteStrip struct {
-	Page  int      `json:"page"`
-	Pages int      `json:"pages"`
-	Title string   `json:"title"`
-	Lines []string `json:"lines"`
+	Page    int            `json:"page"`
+	Pages   int            `json:"pages"`
+	Title   string         `json:"title"`
+	Lines   []string       `json:"lines"`
+	Image   *remoteImage   `json:"image"`
+	Regions []remoteRegion `json:"regions"`
+}
+
+// remoteRegion is an opaque raster patch positioned in the native 800x100
+// touch-strip coordinate space. The decoded image bounds define its size.
+type remoteRegion struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+	remoteImage
 }
 
 // remoteBackground is the optional server-owned frame set for all keys. Keys
