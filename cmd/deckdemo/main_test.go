@@ -200,6 +200,7 @@ type fakeDemoDeck struct {
 	reads           []fakeRead
 	brightnessCalls []int
 	keyImages       map[int]image.Image
+	keyImageCalls   int
 	stripImages     []image.Image
 	stripRegions    []fakeStripRegion
 	closeCalls      int
@@ -240,6 +241,7 @@ func (d *fakeDemoDeck) SetBrightness(percent int) error {
 }
 
 func (d *fakeDemoDeck) SetKeyImage(index int, img image.Image) error {
+	d.keyImageCalls++
 	d.keyImages[index] = img
 	return nil
 }
@@ -456,6 +458,107 @@ func TestRunDemoRendersLocallyWhenEndpointUnavailable(t *testing.T) {
 	}
 	if deck.brightnessCalls[0] != 50 {
 		t.Fatalf("brightness = %v, want [50]", deck.brightnessCalls)
+	}
+}
+
+func TestRunConnectedRecoversLocalFallbackToBridge(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	deck := newFakeDemoDeck()
+	state := &demoState{brightness: 50, pollMS: 1}
+	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
+		t.Fatalf("initial local restore: %v", err)
+	}
+	initialBrightnessCalls := len(deck.brightnessCalls)
+	initialKeyWrites := deck.keyImageCalls
+	initialStripWrites := len(deck.stripImages)
+
+	demo := remoteDemo{Revision: 3, PollMS: 5000, EventsSeen: 12}
+	demo.Presentation.Brightness = 65
+	demo.Key = &remoteKey{Index: 0, Label: "Volume", State: "ready", BG: "#55764A", FG: "#F6F5EE"}
+	demo.Strip = &remoteStrip{Page: 1, Pages: 2, Title: "Audio", Lines: []string{"System volume 42%"}}
+	demo.Background = &remoteBackground{Keys: []remoteKey{{Index: 1, Label: "Mute", BG: "#272C24", FG: "#F6F5EE"}}}
+
+	fetchCalls := 0
+	fetch := func(context.Context) (remoteDemo, error) {
+		fetchCalls++
+		if fetchCalls == 1 {
+			return remoteDemo{}, errors.New("controller still starting")
+		}
+		return demo, nil
+	}
+	deck.onStripImage = cancel
+	if err := runConnected(ctx, deck, state, streamdeck.ModelPlus, fetch); err != nil {
+		t.Fatalf("runConnected: %v", err)
+	}
+
+	if fetchCalls < 2 {
+		t.Fatalf("controller polls = %d, want failure followed by recovery", fetchCalls)
+	}
+	if !state.bridge || state.activeKey != demo.Key || state.activeStrip != demo.Strip {
+		t.Fatalf("bridge state not adopted: bridge=%t key=%+v strip=%+v", state.bridge, state.activeKey, state.activeStrip)
+	}
+	if state.brightness != 65 || len(deck.brightnessCalls) != initialBrightnessCalls+1 || deck.brightnessCalls[len(deck.brightnessCalls)-1] != 65 {
+		t.Fatalf("brightness was not restored from bridge: state=%d calls=%v", state.brightness, deck.brightnessCalls)
+	}
+	if len(deck.keyImages) != streamdeck.KeyCount || deck.keyImageCalls != initialKeyWrites+streamdeck.KeyCount {
+		t.Fatalf("bridge recovery keys = %d writes=%d, want %d keys and %d new writes", len(deck.keyImages), deck.keyImageCalls, streamdeck.KeyCount, streamdeck.KeyCount)
+	}
+	if len(deck.stripImages) != initialStripWrites+1 {
+		t.Fatalf("bridge recovery strip writes = %d, want %d", len(deck.stripImages), initialStripWrites+1)
+	}
+	wantActive := render.KeySize(render.KeyView{Index: 0, Label: "Volume", BG: color.NRGBA{R: 0x55, G: 0x76, B: 0x4a, A: 0xff}, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[0], wantActive, "recovered bridge active key")
+	wantBackground := render.KeySize(render.KeyView{Index: 1, Label: "Mute", BG: bridgePaperInk, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
+	assertImagesEqual(t, deck.keyImages[1], wantBackground, "recovered bridge background key")
+}
+
+func TestBridgePollFailureRetainsStateUntilRecovery(t *testing.T) {
+	deck := newFakeDemoDeck()
+	originalKey := &remoteKey{Index: 0, Label: "Volume", State: "ready", BG: "#F6F5EE", FG: "#272C24"}
+	originalStrip := &remoteStrip{Page: 0, Pages: 2, Title: "Audio", Lines: []string{"System volume 42%"}}
+	originalBackground := []remoteKey{{Index: 1, Label: "Mute", BG: "#272C24", FG: "#F6F5EE"}}
+	state := &demoState{
+		brightness:  60,
+		bridge:      true,
+		activeKey:   originalKey,
+		activeStrip: originalStrip,
+		background:  originalBackground,
+		pollMS:      2000,
+	}
+	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
+		t.Fatalf("initial bridge restore: %v", err)
+	}
+	brightnessCalls := len(deck.brightnessCalls)
+	keyWrites := deck.keyImageCalls
+	stripWrites := len(deck.stripImages)
+
+	if err := handlePollResult(deck, state, streamdeck.ModelPlus, pollResult{err: errors.New("controller restarting")}); err != nil {
+		t.Fatalf("failed poll: %v", err)
+	}
+	if !state.bridge || state.activeKey != originalKey || state.activeStrip != originalStrip || len(state.background) != 1 || state.background[0] != originalBackground[0] || state.brightness != 60 || state.pollMS != 2000 {
+		t.Fatalf("failed poll changed bridge state: %+v", state)
+	}
+	if len(deck.brightnessCalls) != brightnessCalls || deck.keyImageCalls != keyWrites || len(deck.stripImages) != stripWrites {
+		t.Fatalf("failed poll repainted output: brightness=%v keys=%d strips=%d", deck.brightnessCalls, deck.keyImageCalls, len(deck.stripImages))
+	}
+
+	recovered := remoteDemo{Revision: 3, PollMS: 3000, EventsSeen: 13}
+	recovered.Presentation.Brightness = 70
+	recovered.Key = &remoteKey{Index: 0, Label: "Volume", State: "changed", BG: "#55764A", FG: "#F6F5EE"}
+	recovered.Strip = &remoteStrip{Page: 1, Pages: 2, Title: "Audio", Lines: []string{"System volume 55%"}}
+	if err := handlePollResult(deck, state, streamdeck.ModelPlus, pollResult{demo: recovered}); err != nil {
+		t.Fatalf("recovery poll: %v", err)
+	}
+	if !state.bridge || state.activeKey != recovered.Key || state.activeStrip != recovered.Strip || state.pollMS != 3000 || state.remoteEventsSeen != 13 {
+		t.Fatalf("recovered bridge state not adopted: %+v", state)
+	}
+	if state.brightness != 70 || len(deck.brightnessCalls) != brightnessCalls+1 || deck.brightnessCalls[len(deck.brightnessCalls)-1] != 70 {
+		t.Fatalf("recovery brightness = %d calls=%v", state.brightness, deck.brightnessCalls)
+	}
+	if len(deck.stripImages) != stripWrites+1 {
+		t.Fatalf("recovery strip writes = %d, want %d", len(deck.stripImages), stripWrites+1)
 	}
 }
 

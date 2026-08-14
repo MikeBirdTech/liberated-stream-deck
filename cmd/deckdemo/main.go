@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	inputReadTimeout  = 50 * time.Millisecond
-	reconnectInterval = time.Second
+	inputReadTimeout           = 50 * time.Millisecond
+	reconnectInterval          = time.Second
+	bridgeFallbackPollInterval = 5 * time.Second
 )
 
 var displayModes = [...]string{"INPUT", "KEY TEST", "TOUCH TEST"}
@@ -163,18 +164,17 @@ func run() error {
 
 	state := demoState{brightness: 70}
 	state.stripOutput.configure(touchStripMinimumInterval(), defaultTouchStripFailureDelay)
+	var fetchDemo fetchDemoFunc
+	if controllerBaseURL != "" {
+		fetchDemo = func(ctx context.Context) (remoteDemo, error) {
+			return fetchRemoteDemo(ctx, demoHTTPClient, controllerBaseURL)
+		}
+	}
 	return runDemo(
 		ctx,
 		&state,
 		func() (demoDeck, error) { return streamdeck.OpenAny() },
-		func(ctx context.Context) (remoteDemo, error) {
-			if controllerBaseURL == "" {
-				// No remote controller configured: revision-0 payload keeps
-				// the classic rev-1 local render without any network I/O.
-				return remoteDemo{}, nil
-			}
-			return fetchRemoteDemo(ctx, demoHTTPClient, controllerBaseURL)
-		},
+		fetchDemo,
 		reconnectInterval,
 	)
 }
@@ -199,17 +199,28 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		info, setupErr := deck.Info()
 		var remote remoteDemo
 		if setupErr == nil {
-			var fetchErr error
-			remote, fetchErr = fetchDemo(ctx)
-			if fetchErr != nil {
-				// Hardening: an absent or broken endpoint must never strand
-				// the deck dark. Fall back to the classic local demo render.
-				log.Printf("demo endpoint unavailable mode=rev1-local error=%q", fetchErr)
-				state.bridge = false
-				state.activeKey = nil
-				state.activeStrip = nil
+			if fetchDemo == nil {
+				// No remote controller configured: revision-0 state keeps the
+				// classic rev-1 local render without any network I/O.
+				applyRemoteDemo(state, remoteDemo{})
 			} else {
-				applyRemoteDemo(state, remote)
+				var fetchErr error
+				remote, fetchErr = fetchDemo(ctx)
+				if fetchErr != nil {
+					// A dead endpoint must never strand a newly started deck dark.
+					// Render locally until the connection-local poller recovers the
+					// controller. If bridge state already exists, retain it instead.
+					if !state.bridge {
+						applyRemoteDemo(state, remoteDemo{})
+					}
+					mode := "rev1-local"
+					if state.bridge {
+						mode = "bridge-retained"
+					}
+					log.Printf("demo endpoint unavailable mode=%s error=%q", mode, fetchErr)
+				} else {
+					applyRemoteDemo(state, remote)
+				}
 			}
 		}
 		if setupErr == nil {
@@ -288,7 +299,7 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 
 	var pollResults chan pollResult
 	var stopPoll func()
-	if state.bridge {
+	if fetchDemo != nil {
 		pollResults = make(chan pollResult, 1)
 		stopPoll = startBridgePoll(connectionCtx, state, fetchDemo, pollResults)
 		defer stopPoll()
@@ -312,11 +323,7 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 			}
 			continue
 		case poll := <-pollResults:
-			if poll.err != nil {
-				log.Printf("demo poll error=%q", poll.err)
-				continue
-			}
-			if err := handlePoll(deck, state, model, poll.demo); err != nil {
+			if err := handlePollResult(deck, state, model, poll); err != nil {
 				return err
 			}
 			continue
@@ -347,8 +354,9 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 	}
 }
 
-// startBridgePoll launches the poller goroutine on the controller's chosen cadence and
-// returns a stop function. poll_ms is treated as opaque (currently 2000-5000).
+// startBridgePoll launches the controller poller and returns a stop function.
+// Bridge responses choose the steady-state cadence; local fallback retries on
+// a modest fixed cadence until a valid bridge response arrives.
 func startBridgePoll(ctx context.Context, state *demoState, fetchDemo fetchDemoFunc, results chan<- pollResult) func() {
 	stop := make(chan struct{})
 	done := make(chan struct{})
@@ -356,7 +364,7 @@ func startBridgePoll(ctx context.Context, state *demoState, fetchDemo fetchDemoF
 		defer close(done)
 		interval := time.Duration(state.pollMS) * time.Millisecond
 		if interval <= 0 {
-			interval = 2 * time.Second
+			interval = bridgeFallbackPollInterval
 		}
 		for {
 			timer := time.NewTimer(interval)
@@ -370,7 +378,7 @@ func startBridgePoll(ctx context.Context, state *demoState, fetchDemo fetchDemoF
 			case <-timer.C:
 			}
 			demo, err := fetchDemo(ctx)
-			if err == nil && demo.PollMS > 0 {
+			if err == nil && isBridgeDemo(demo) {
 				interval = time.Duration(demo.PollMS) * time.Millisecond
 			}
 			select {
@@ -386,6 +394,14 @@ func startBridgePoll(ctx context.Context, state *demoState, fetchDemo fetchDemoF
 		close(stop)
 		<-done
 	}
+}
+
+func handlePollResult(deck demoDeck, state *demoState, model streamdeck.Model, poll pollResult) error {
+	if poll.err != nil {
+		log.Printf("demo poll error=%q", poll.err)
+		return nil
+	}
+	return handlePoll(deck, state, model, poll.demo)
 }
 
 // handleAck repaints from an event POST ack. revision-2 acks carry a state
@@ -415,24 +431,28 @@ func handleAck(deck demoDeck, state *demoState, model streamdeck.Model, ack even
 }
 
 // handlePoll applies one bridge-mode GET and re-renders from the server state.
+// Invalid responses leave either the local fallback or the last-known bridge
+// render untouched; the poller will keep trying at its current cadence.
 func handlePoll(deck demoDeck, state *demoState, model streamdeck.Model, demo remoteDemo) error {
-	if demo.Revision >= 2 && demo.Key != nil && demo.Strip != nil && demo.PollMS > 0 {
-		state.activeKey = demo.Key
-		state.activeStrip = demo.Strip
-		state.pollMS = demo.PollMS
-		if demo.Background != nil {
-			state.background = demo.Background.Keys
-		} else {
-			state.background = nil
-		}
+	if !isBridgeDemo(demo) {
+		return nil
 	}
-	state.remoteEventsSeen = demo.EventsSeen
-	state.remoteLast = ""
-	if demo.LastEvent != nil {
-		state.remoteLast = lastEventMessage(demo.LastEvent.Summary)
+	wasBridge := state.bridge
+	previousBrightness := state.brightness
+	if err := applyRemoteDemo(state, demo); err != nil {
+		return err
 	}
 	if err := maybeUploadBootImage(deck, state, demo.BootImage); err != nil {
 		log.Printf("boot image error=%q", err)
+	}
+	if !wasBridge {
+		log.Printf("demo endpoint recovered revision=%d mode=bridge poll_ms=%d", demo.Revision, demo.PollMS)
+		return restoreDemo(deck, state, model)
+	}
+	if state.brightness != previousBrightness {
+		if err := deck.SetBrightness(state.brightness); err != nil {
+			return fmt.Errorf("poll brightness: %w", err)
+		}
 	}
 	if err := renderStrip(deck, state, model); err != nil {
 		return err
@@ -506,7 +526,7 @@ func applyRemoteDemo(state *demoState, demo remoteDemo) error {
 	// Mode is chosen from revision, never from the command string: the
 	// command field stays "run_hardware_demo" forever as deliberate backward
 	// compatibility, so it is ignored here.
-	if demo.Revision >= 2 && demo.Key != nil && demo.Strip != nil && demo.PollMS > 0 {
+	if isBridgeDemo(demo) {
 		state.bridge = true
 		state.activeKey = demo.Key
 		state.activeStrip = demo.Strip
@@ -536,6 +556,10 @@ func applyRemoteDemo(state *demoState, demo remoteDemo) error {
 	state.remoteTitle = demo.Presentation.Title
 	state.remoteMessage = demo.Presentation.Message
 	return nil
+}
+
+func isBridgeDemo(demo remoteDemo) bool {
+	return demo.Revision >= 2 && demo.Key != nil && demo.Strip != nil && demo.PollMS > 0
 }
 
 func handleEvent(deck demoDeck, state *demoState, model streamdeck.Model, event streamdeck.Event) error {
