@@ -1,10 +1,9 @@
 # Stream Deck Plus firmware-update research
 
-This document records the firmware-update path for Stream Deck Plus
-(`20GBD9901`, USB PID `0x0084`) without turning the library into a firmware
-writer. Every claim is labelled by evidence class. Static framing is useful
-for inspecting a future capture, but it is not proof that a device accepts a
-payload or that interruption is recoverable.
+This document records static analysis and direct hardware probes of the
+firmware-update transport on Stream Deck Plus (`20GBD9901`, USB PID `0x0084`).
+Every claim is labelled by evidence class so a successful USB write is not
+mistaken for device-side acceptance of an update.
 
 ## Evidence status
 
@@ -15,14 +14,13 @@ payload or that interruption is recoverable.
 | The backend emits full 1024-byte output reports with command `0x05` | Static: same app slice |
 | The byte-level header and 4096/1008-byte chunking below | Static: same app slice |
 | The host performs no container parsing, checksum, signature verification, bootloader-entry command, or recovery exchange in this backend method | Static: same app slice |
-| A genuine Plus firmware payload has this transport on the wire | **Not captured** |
-| The Plus accepts, authenticates, installs, or rolls back a payload | **Not established** |
-| Bootloader USB identity, failure behavior, and recovery procedure | **Not established** |
+| The Plus accepts full-size command-`0x05` output reports at the HID layer | Observed on hardware: three fixed probes, 2026-08-14 |
+| Empty/incomplete, empty/final, and short-invalid/final probes leave firmware getters and normal output operational | Observed on hardware: same run |
+| A successful HID write means the update payload was accepted | **Not established**; the protocol has no host-visible acknowledgement in this path |
 
-The repository contains a synthetic parser fixture only. It is deliberately
-labelled synthetic and must never be cited as a device capture. A genuine,
-provenance-preserving firmware artifact or vendor-app capture is still needed
-before issue #25's hardware acceptance criteria are complete.
+The fixed probes establish that the recovered command reaches the device and
+that these invalid forms cause no visible update transition. They do not prove
+that the device interpreted or retained their payload bytes.
 
 ## Reproducible static artifact
 
@@ -104,12 +102,47 @@ signature, or rollback token in this 16-byte header. The host backend does not
 parse a firmware container: it streams the selected file unchanged. Any image
 format, integrity field, cryptographic authorization, flash addressing, or
 bootloader state transition must therefore be inside the opaque payload or
-implemented by device firmware. None is established without a real artifact
-or capture.
+implemented by device firmware. The fixed negative probes and lack of a
+device-side acknowledgement do not establish those semantics.
 
-Output command `0x05` must remain classified as **static-only firmware
-transport**. It has not been sent by this repository and is not exposed by the
-library.
+## Direct hardware probes (2026-08-14)
+
+The probes ran on the physical Plus at PID `0x0084`. Baseline getters were LD
+`2.0.0.0` / `0x325db0b1`, AP1 `2.0.3.2` / `0x8fe07412`, and AP2 `2.0.3.7` /
+`0x6aa3cbc4`; sleep was 0 seconds and unit dimensions were normal. The existing
+controller daemon was stopped for exclusive HID access and restored after the
+run.
+
+Each probe was one full 1024-byte output report:
+
+| probe | first 16 bytes | payload | report SHA-256 | result |
+| --- | --- | --- | --- | --- |
+| incomplete empty | `02 05 00 00 00 00 00 00 00 02 00 00 00 00 00 00` | none | `16307d511ef890acbebe9da31fec11f551d63b4df905ceea04401f87734ba7dd` | 1024-byte write accepted; getters unchanged |
+| final empty | `02 05 00 01 01 00 00 00 00 02 00 00 00 00 00 00` | none | `b643850a287da99dfc5334ea72fed28a9b18ffecf294167ac1cef9cef2f27842` | 1024-byte write accepted; getters unchanged |
+| final invalid marker | `02 05 00 01 01 00 00 20 00 02 00 00 00 00 00 00` | `LIBERATED-FW-PROBE-NOT-AN-IMAGE\n` | `dca6656aa7253de4b80f43c972a227ccc87467fce43b47046683f7ac719bb82d` | 1024-byte write accepted; getters unchanged |
+
+The marker payload SHA-256 was
+`ec46662895eacbc4a141c00ef080f75ec9ed77f2507faf78907f0102e9a11c86`.
+There was no visible reset or loss of enumeration. The unit-info gallery bytes
+changed from `0/0` to `136/137`, matching their previously observed volatile
+behavior; firmware versions, checksums, identity state, dimensions, and sleep
+state did not change. Known-good key-fill output succeeded after the first and
+third probes. After the controller LaunchAgent was restored it reopened the
+Plus and restored all eight keys, the strip, and brightness.
+
+`deckboot` exposes only these three exact reports; there is no arbitrary
+firmware payload option:
+
+```bash
+go run ./cmd/deckboot -fwprobe incomplete-empty
+go run ./cmd/deckboot -fwprobe final-empty
+go run ./cmd/deckboot -fwprobe final-marker
+```
+
+These are **negative hardware probes**. A return value of 1024 proves that the
+macOS HID stack and device endpoint accepted the report. Because the vendor
+method performs no acknowledgement read, it does not prove that application
+firmware recognized command `0x05` or accepted an update.
 
 ## Offline capture inspection
 
@@ -132,52 +165,17 @@ report. It reports a SHA-256 fingerprint over the exact reassembled payload.
 That digest detects accidental mismatch against a separately recorded hash;
 it is not a signature or evidence of device authorization.
 
-The test fixture at
+The parser test fixture at
 `internal/firmwarecapture/testdata/synthetic-final-report.json` encodes one
 small, human-readable report. Larger tests cover the 4096-byte outer boundary
-and every validation rule without containing or generating a device writer.
+and every validation rule. Separate tests assert the exact bytes and hashes of
+all three fixed hardware probes.
 
-## Artifact and capture handling
+## Next hardware questions
 
-When a real artifact or capture becomes available:
-
-1. Preserve the original bytes read-only. Record source, acquisition date,
-   model, current and offered firmware versions, app build, VID/PID, USB
-   descriptors, and SHA-256 before analysis.
-2. Keep the raw HID capture, extracted `0x05` reports, and reassembled payload
-   as separate files with hashes. Do not normalize padding or edit the source.
-3. Run `deckfwinspect` and compare the reassembled hash with any independently
-   captured file hash. A mismatch blocks all later work.
-4. Analyze the payload offline for magic, section table, load addresses,
-   version/model binding, compression/encryption, checksums, and signatures.
-   Record unknown fields as unknown; do not infer them from a single sample.
-5. Obtain at least two versions or an independent device dump before treating
-   changing fields as checksums, addresses, counters, or signatures.
-
-## Controlled hardware validation and recovery gates
-
-No end-to-end write should occur until every gate below is satisfied:
-
-1. **Compatibility gate:** genuine payload provenance, exact `20GBD9901` /
-   PID `0x0084` match, known current and target versions, offline structural
-   parse, and independently recorded hashes.
-2. **Passive bootloader gate:** observe the vendor updater first. Record
-   whether the device re-enumerates, its bootloader VID/PID and descriptors,
-   the command that causes the transition, timing, acknowledgements, and the
-   post-update version getters. Do not guess an entry command.
-3. **Recovery gate:** have a known-good image, a proven way to reach the
-   bootloader without working application firmware, and a tested restore path.
-   If recovery requires SWD/JTAG, confirm the pads, voltage, MCU, readout
-   protection, and a successful non-destructive connection before USB writes.
-4. **Isolation gate:** use a sacrificial or explicitly recoverable Plus on a
-   powered, logged USB path. Disconnect unrelated Stream Deck devices and stop
-   all other HID clients.
-5. **Execution gate:** implement only a model- and version-locked replay of a
-   validated capture, with full-size-write checks and immutable input hashes.
-   A generic command writer or parameter sweep is out of scope.
-6. **Failure gate:** do not test cable pulls, corrupt chunks, replay, downgrade,
-   or power loss until the clean update and recovery path have each succeeded
-   more than once.
-
-Until those gates are met, the safe deliverable is the static map and offline
-parser—not a device-writing API.
+Further work should vary one field at a time while recording getters and USB
+enumeration around every write: wrong target byte, nonzero starting indexes,
+inconsistent completion flags, and a two-report incomplete sequence. The
+device's volatile status getters `0x0B` and `0x0C` should also be sampled before
+and after each probe to look for a state-machine signal that the standard
+firmware getters do not expose.

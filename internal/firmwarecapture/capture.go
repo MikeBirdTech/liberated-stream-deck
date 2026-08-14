@@ -37,8 +37,9 @@ type Capture struct {
 
 // Parse validates and reassembles a raw concatenation of 1024-byte firmware
 // update output reports. The format is static evidence recovered from the
-// Stream Deck 7.4.2 20GBD9901 backend; it has not been validated by a genuine
-// firmware capture or hardware update.
+// Stream Deck 7.4.2 20GBD9901 backend. Fixed invalid reports using this framing
+// have reached the physical Plus, but no successful update semantics are
+// inferred from those negative probes.
 func Parse(r io.Reader) (Capture, error) {
 	var capture Capture
 	expectedOuter := 0
