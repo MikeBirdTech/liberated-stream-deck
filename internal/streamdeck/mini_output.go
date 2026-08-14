@@ -7,6 +7,8 @@ import (
 )
 
 // SetKeyImage rotates, BMP-encodes, and uploads one exact-size Mini key image.
+// It uses the Mini-specific command-0x01 final-chunk marker; it does not send
+// the separate 0x0B/0x63 commit used by the vendor app's bulk-image task.
 func (d *Mini) SetKeyImage(index int, img image.Image) error {
 	encoded, err := encodeMiniKeyBMP(img)
 	if err != nil {

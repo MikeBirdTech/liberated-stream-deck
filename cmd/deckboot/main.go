@@ -1,9 +1,9 @@
 // deckboot persists a power-on frame to a connected Stream Deck Plus using
 // the undocumented 0x09 boot-frame channel (see the Protocol section of the
 // README). A useful tool while auditing device capabilities: it exercises the
-// same path ESDCommUploadLogoTask uses in the official app. The -lcd flag
-// instead targets the documented 0x08 full-screen LCD channel, which is
-// display-only (volatile; does not survive a power cycle).
+// Plus backend's command-0x09 transport. The -lcd flag instead targets the
+// documented 0x08 full-screen LCD channel, which is display-only (volatile;
+// does not survive a power cycle).
 //
 // Usage:
 //
