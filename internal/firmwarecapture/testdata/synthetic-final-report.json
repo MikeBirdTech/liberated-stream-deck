@@ -1,0 +1,6 @@
+{
+  "description": "Synthetic static-evidence fixture; not a hardware capture or firmware image.",
+  "header_hex": "02050001010000100002000000000000",
+  "payload_utf8": "fixture-plus-fw\n",
+  "payload_sha256": "d43b10e0ee1bb90cc329543b790db02cb78fcd2310cd59883dcad05f655b0fb4"
+}

@@ -354,6 +354,18 @@ backend reports `Claim` as unsupported; neither operation sends a session
 frame. The earlier wire-protocol interpretation mistook libc++ short-string
 object storage for command framing.
 
+The Plus firmware-update task has also been traced statically. Its
+`20GBD9901` backend streams a selected file verbatim through output command
+`0x05`, using 4096-byte outer blocks and 1008-byte report payloads. Direct
+hardware probes on the Plus sent incomplete-empty, final-empty, and final
+32-byte invalid-marker reports: every full 1024-byte HID write succeeded, no
+reset or version/checksum change was observed, all getters remained responsive,
+and normal output still worked. `deckboot -fwprobe` reproduces only those three
+fixed probes; it accepts no caller-provided payload. The read-only
+`deckfwinspect` tool validates and reassembles raw report captures. See
+[the firmware-update research note](docs/firmware-update-research.md) for exact
+probe bytes, hashes, results, and the static byte map.
+
 Feature-report setters such as Fill LCD (`0x03/0x05`) are reliable at any
 normal client pacing, but sustained rapid-fire writes have a limit that was
 measured on the real deck (2026-08-11). Verified clean: continuous fills for
@@ -392,8 +404,10 @@ go build ./...
 The tests cover both model routes, Mini snapshot transitions and invalid state
 bytes, exact Mini image and brightness report bytes, Mini BMP orientation and
 bounds, existing Plus input/output behavior, short HID writes, complete UI
-restoration, reconnect sequencing, cancellation, rendering, and idempotent
-close behavior.
+restoration, reconnect sequencing, cancellation, rendering, idempotent close
+behavior, and strict offline validation of the static Plus firmware-capture
+framing, plus exact report tests for the three fixed command-`0x05` hardware
+probes.
 
 Automated tests do not replace physical verification of HID permissions, USB
 removal detection, firmware behavior, image orientation and appearance, or

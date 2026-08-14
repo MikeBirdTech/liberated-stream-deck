@@ -23,18 +23,24 @@ All output reports are 1024-byte interrupt frames beginning `[0x02][cmd]`.
 | --- | --- | --- | --- | --- |
 | 0x01 | unclassified upload | `[02][01][idx][0x00][done][param][0x00 x8][data@0x10]`, chunks <=1008 | feature `[0x0B][0x63][0x02][param-1]` | static framing; negative probes only |
 | 0x02 | unclassified upload variant | `[02][02][type][done][data@+4]`, chunks <=1020 | feature `[0x03][0x07]` | static framing; negative probes only |
+| 0x05 | Plus firmware file transport | `[02][05][outer][outer_done][file_done][inner u16][size u16][0x02][0x00 x6][data@0x10]`; 4096-byte outer blocks, chunks <=1008 | - | static Plus `20GBD9901` updater trace; three fixed negative probes accepted as full HID writes on hardware |
 | 0x07 | key image | documented | - | documented and observed |
 | 0x08 | full-screen LCD image | documented | - | documented and observed |
 | 0x09 | power-on frame | `[02][09][type][done][idx@+4][size@+6][data@+8]` (reversed header) | - | observed, including persistence across power cycles |
 | 0x0B | touch-strip image | documented | - | documented and observed |
 | 0x0C | partial window image | documented | - | documented and observed |
 
-The static call graph places output command 0x02 and its `[0x03][0x07]`
-finalizer, plus a separate 4096-byte chunk uploader, on paths capable of
-carrying firmware-sized payloads. No successful firmware update or vendor-app
-HID capture validates a firmware meaning for those bytes. The 0x01 upload has
-four app call sites, but the meaning and valid range of its `param` byte remain
-unknown.
+The Plus `ESDCommUpdateFWTask` dispatches to model `20GBD9901`'s backend slot
+`+0xC0`, which opens the selected file and sends it verbatim through the
+4096-byte/command-0x05 uploader. On 2026-08-14 the physical Plus accepted three
+fixed full-size reports at the HID layer: incomplete empty, final empty, and a
+final 32-byte invalid marker. None caused a visible reset or firmware getter
+change, and ordinary output remained operational. This is negative-probe
+evidence rather than an acknowledgement of update semantics. See
+`firmware-update-research.md` for exact bytes, hashes and before/after state.
+Output command 0x02 and its `[0x03][0x07]` finalizer remain a separate
+unclassified upload form. The 0x01 upload has four app call sites, but the
+meaning and valid range of its `param` byte remain unknown.
 
 ## Feature report map (from app call sites)
 

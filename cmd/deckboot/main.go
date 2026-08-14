@@ -17,6 +17,7 @@
 //	deckboot -fillkey 4,ff8800        fill one key (index 0-7) with a color
 //	deckboot -sleep 300               set idle time before sleep, seconds (0 disables)
 //	deckboot -info                    print firmware, serial, unit info, sleep duration
+//	deckboot -fwprobe final-marker    send a fixed command-0x05 hardware probe
 package main
 
 import (
@@ -115,13 +116,14 @@ func main() {
 	fillKey := flag.String("fillkey", "", "fill one key with a color as <index>,<RRGGBB>")
 	sleepSeconds := flag.Int("sleep", -1, "set idle time before sleep in seconds (0 disables)")
 	info := flag.Bool("info", false, "print diagnostic getters (firmware, serial, unit info, sleep)")
+	fwProbe := flag.String("fwprobe", "", "fixed command-0x05 probe: incomplete-empty, final-empty, or final-marker")
 	flag.Parse()
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo | -filllcd <RRGGBB> | -fillkey <index>,<RRGGBB> | -sleep <seconds> | -info\n")
+		fmt.Fprintf(os.Stderr, "usage: deckboot -image <file> | -color <RRGGBB> | -lcd <file> | -partial <x>,<y>,<file> | -logo | -filllcd <RRGGBB> | -fillkey <index>,<RRGGBB> | -sleep <seconds> | -info | -fwprobe <mode>\n")
 		flag.PrintDefaults()
 	}
 	selected := 0
-	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo, *fillLCDHex != "", *fillKey != "", *sleepSeconds >= 0, *info} {
+	for _, set := range []bool{*imagePath != "", *colorHex != "", *lcdPath != "", *partial != "x,y,file", *logo, *fillLCDHex != "", *fillKey != "", *sleepSeconds >= 0, *info, *fwProbe != ""} {
 		if set {
 			selected++
 		}
@@ -131,7 +133,7 @@ func main() {
 		os.Exit(2)
 	}
 	if selected > 1 {
-		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, -logo, -filllcd, -fillkey, -sleep, or -info")
+		fmt.Fprintln(os.Stderr, "choose exactly one of -image, -color, -lcd, -partial, -logo, -filllcd, -fillkey, -sleep, -info, or -fwprobe")
 		os.Exit(2)
 	}
 
@@ -260,6 +262,21 @@ func main() {
 	}
 	if *info {
 		printGetters(deck)
+		return
+	}
+	if *fwProbe != "" {
+		result, err := deck.ProbeFirmwareTransport(streamdeck.FirmwareProbe(*fwProbe))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "firmware transport probe:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("firmware transport probe=%s header=% x payload_bytes=%d payload_sha256=%x report_sha256=%x\n",
+			result.Probe,
+			result.Header,
+			result.PayloadLength,
+			result.PayloadSHA256,
+			result.ReportSHA256,
+		)
 		return
 	}
 	if *lcdPath != "" {
