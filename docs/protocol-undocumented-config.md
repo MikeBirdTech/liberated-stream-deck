@@ -4,8 +4,8 @@ Source: static analysis of the official Elgato Stream Deck app for macOS
 (version 7.4.2.22730 era, x86_64 slice) plus on-device verification on a
 Stream Deck Plus (PID 0x0084, firmware 2.0.3.7). Static call-site evidence,
 negative hardware probes and successfully observed device behavior are kept
-separate below. A report that was transmitted without an observable effect
-does not have a validated meaning.
+separate below. Report ownership is model-specific: a host task's virtual call
+can resolve to different commands on Mini and Plus.
 
 Evidence terms used here:
 
@@ -21,7 +21,8 @@ All output reports are 1024-byte interrupt frames beginning `[0x02][cmd]`.
 
 | cmd | use | header layout | commit control | evidence |
 | --- | --- | --- | --- | --- |
-| 0x01 | unclassified upload | `[02][01][idx][0x00][done][param][0x00 x8][data@0x10]`, chunks <=1008 | feature `[0x0B][0x63][0x02][param-1]` | static framing; negative probes only |
+| 0x01 | Mini bulk key-image upload | `[02][01][idx][0x00][0x00][key 1..6][0x00 x10][data@0x10]`, chunks <=1008 | feature `[0x0B][0x63][0x02][key-1]` | static Mini backend mapping; fixed Plus target-1 probe changed only session gallery state |
+| 0x01 | Mini single-key image upload | `[02][01][idx][0x00][done][key 1..6][0x00 x10][data@0x10]`, chunks <=1008 | - | documented Mini protocol and library tests |
 | 0x02 | unclassified upload variant | `[02][02][type][done][data@+4]`, chunks <=1020 | feature `[0x03][0x07]` | static framing; negative probes only |
 | 0x05 | Plus firmware file transport | `[02][05][outer][outer_done][file_done][inner u16][size u16][0x02][0x00 x6][data@0x10]`; 4096-byte outer blocks, chunks <=1008 | - | static Plus `20GBD9901` updater trace; three fixed negative probes accepted as full HID writes on hardware |
 | 0x07 | key image | documented | - | documented and observed |
@@ -39,8 +40,12 @@ change, and ordinary output remained operational. This is negative-probe
 evidence rather than an acknowledgement of update semantics. See
 `firmware-update-research.md` for exact bytes, hashes and before/after state.
 Output command 0x02 and its `[0x03][0x07]` finalizer remain a separate
-unclassified upload form. The 0x01 upload has four app call sites, but the
-meaning and valid range of its `param` byte remain unknown.
+unclassified upload form. Command 0x01 belongs to the Mini backend, not the
+Plus backend: model-independent upload tasks dispatch through virtual slots
+that resolve to commands 0x09, 0x07, 0x08/0x0B and 0x0C on Plus. The two Mini
+0x01 methods are also distinct: only the bulk form has the 0x0B/0x63 commit;
+the documented per-key form uses the final-chunk byte. See
+`output-command-01-research.md` for the address map and hardware results.
 
 ## Feature report map (from app call sites)
 
@@ -55,7 +60,7 @@ Documented and statically recovered forms (all 32-byte feature reports):
 | `[0x03][0x07][0x00...]` | paired finalizer for output-cmd-0x02 uploads | static pairing; negative probe only |
 | `[0x03][0x08][brightness]` | brightness | documented and observed |
 | `[0x03][0x0D][u32 seconds]` | sleep duration | documented and observed |
-| `[0x0B][0x63][0x02][param-1]` | paired finalizer for output-cmd-0x01 uploads | static pairing; negative probe only |
+| `[0x0B][0x63][0x02][key-1]` | Mini bulk key-image commit | static Mini target mapping; direct Plus target-1 probe changed only `GalleryKeys` state |
 | `[0x0B][0xA2][u32]` | unclassified 32-bit control form | static call site; negative probe only |
 | `[0x0B][0x01][b1][b2][b3]` | unclassified three-byte control form | static call site; negative probe only |
 
@@ -120,8 +125,10 @@ the scheduler by sending feature report `0x03/0x0C`.
 ## Reproducibility
 
 The documented image and setting operations, plus the undocumented 0x09
-power-on frame, produced their stated effects on the physical device. The
-0x01/0x0B, 0x02/0x03-0x07 and other unclassified control pairs were sent only
-as full-size negative probes with serial-region payloads; none altered the
-de-provisioned serial state or produced an effect that validates a semantic
-name for those forms (see the fault report above).
+power-on frame, produced their stated effects on the physical device. Earlier
+0x01/0x0B, 0x02/0x03-0x07 and other unclassified control pairs did not alter
+the de-provisioned serial state. A later fixed, valid-BMP 0x01/0x0B target-1
+probe changed unit-info `GalleryKeys` from 0 to 32 across a HID close/reopen;
+normal Plus image restoration returned it to 0. That is an observed state
+change, but it does not validate a visible Plus target or durable store. See
+`output-command-01-research.md` for exact bytes and hashes.

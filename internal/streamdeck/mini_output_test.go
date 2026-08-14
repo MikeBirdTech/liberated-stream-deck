@@ -128,6 +128,9 @@ func TestMiniSetKeyImageWritesCompleteReports(t *testing.T) {
 	if fake.writes[len(fake.writes)-1][4] != 0x01 {
 		t.Fatal("last write does not have final marker")
 	}
+	if len(fake.featureReports) != 0 {
+		t.Fatalf("feature reports = %d, want 0 (the final-chunk form has no commit report)", len(fake.featureReports))
+	}
 }
 
 func TestMiniSetKeyImageRejectsShortWrite(t *testing.T) {
