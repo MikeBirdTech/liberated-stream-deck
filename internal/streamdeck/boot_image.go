@@ -10,35 +10,68 @@ import (
 	"golang.org/x/image/draw"
 )
 
-// The boot-frame upload channel. Unlike the documented image commands
+// The standby-frame upload channel. Unlike the documented image commands
 // (0x07 key, 0x08 full-screen), uploads via command 0x09 with target 0x05 are
-// persisted by the device and rendered at the next power-on. This channel was
-// reverse-engineered from the official Elgato app (2026-08-10); it is not in
-// the public HID documentation. Empirically verified: an 800x480 JPEG
-// uploaded through UploadBootImage is what the deck shows at boot.
+// persisted by the device and rendered whenever the Plus is powered but not
+// controlled by the app. This channel was reverse-engineered from the official
+// Elgato app (2026-08-10); it is not in the public HID documentation.
 const (
 	bootImageCommand byte = 0x09
 	bootImageTarget  byte = 0x05
 
-	// BootImageWidth / BootImageHeight are the full-LCD boot-frame size.
-	BootImageWidth  = 800
-	BootImageHeight = 480
+	// StandbyImageWidth / StandbyImageHeight are the Plus standby-frame size.
+	StandbyImageWidth  = 800
+	StandbyImageHeight = 480
+
+	// BootImageWidth and BootImageHeight are retained for compatibility.
+	// Deprecated: use StandbyImageWidth and StandbyImageHeight.
+	BootImageWidth  = StandbyImageWidth
+	BootImageHeight = StandbyImageHeight
 )
 
-// UploadBootImage uploads an image that the device persists as its power-on
-// frame. The image is scaled to 800x480 and re-encoded as JPEG, then sent
-// through the undocumented 0x09 chunked upload.
+// SetStandbyImage persists the exact-size image a Stream Deck Plus displays
+// while powered but disconnected from its controlling app. Requiring the
+// native size avoids silently changing an image through this low-level API.
+// The Deck receiver makes this API Plus-only; Mini does not implement it.
+func (d *Deck) SetStandbyImage(img image.Image) error {
+	if img == nil {
+		return fmt.Errorf("standby image is nil")
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() != StandbyImageWidth || bounds.Dy() != StandbyImageHeight {
+		return fmt.Errorf(
+			"standby image must be %dx%d, got %dx%d",
+			StandbyImageWidth,
+			StandbyImageHeight,
+			bounds.Dx(),
+			bounds.Dy(),
+		)
+	}
+	return d.uploadStandbyImage(img)
+}
+
+// UploadBootImage scales img to the standby frame's native size and persists
+// it. It is retained as a compatibility wrapper for callers that relied on
+// automatic scaling.
+//
+// Deprecated: use SetStandbyImage with an exact 800x480 image.
 func (d *Deck) UploadBootImage(img image.Image) error {
-	scaled := ScaleImage(img, BootImageWidth, BootImageHeight)
+	if img == nil {
+		return fmt.Errorf("boot image is nil")
+	}
+	return d.uploadStandbyImage(ScaleImage(img, StandbyImageWidth, StandbyImageHeight))
+}
+
+func (d *Deck) uploadStandbyImage(img image.Image) error {
 	var encoded bytes.Buffer
-	if err := jpeg.Encode(&encoded, scaled, &jpeg.Options{Quality: 92}); err != nil {
-		return fmt.Errorf("encode boot JPEG: %w", err)
+	if err := jpeg.Encode(&encoded, img, &jpeg.Options{Quality: 92}); err != nil {
+		return fmt.Errorf("encode standby JPEG: %w", err)
 	}
 	reports, err := buildBootImageReports(encoded.Bytes())
 	if err != nil {
 		return err
 	}
-	return d.writeImageReports("boot image", int(bootImageTarget), reports)
+	return d.writeImageReports("standby image", int(bootImageTarget), reports)
 }
 
 // buildBootImageReports chunks a JPEG into 1024-byte output reports for the

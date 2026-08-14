@@ -1,5 +1,5 @@
-// deckboot persists a power-on frame to a connected Stream Deck Plus using
-// the undocumented 0x09 boot-frame channel (see the Protocol section of the
+// deckboot persists a standby frame to a connected Stream Deck Plus using
+// the undocumented 0x09 standby-frame channel (see the Protocol section of the
 // README). A useful tool while auditing device capabilities: it exercises the
 // Plus backend's command-0x09 transport. The -lcd flag instead targets the
 // documented 0x08 full-screen LCD channel, which is display-only (volatile;
@@ -7,7 +7,7 @@
 //
 // Usage:
 //
-//	deckboot -image boot.png          upload an image (PNG/JPEG, any size)
+//	deckboot -image standby.png       upload an image (PNG/JPEG, any size)
 //	deckboot -color 5594f6            upload a solid color as RRGGBB
 //	deckboot -lcd screen.png          paint the full LCD (display-only)
 //	deckboot -partial 40,20,region.png
@@ -295,9 +295,10 @@ func main() {
 		fmt.Printf("partial window %dx%d painted at (%d,%d), display-only\n", img.Bounds().Dx(), img.Bounds().Dy(), partialX, partialY)
 		return
 	}
-	if err := deck.UploadBootImage(img); err != nil {
+	standby := streamdeck.ScaleImage(img, streamdeck.StandbyImageWidth, streamdeck.StandbyImageHeight)
+	if err := deck.SetStandbyImage(standby); err != nil {
 		fmt.Fprintln(os.Stderr, "upload:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("boot frame persisted (%dx%d source); it will show at the next power-on\n", img.Bounds().Dx(), img.Bounds().Dy())
+	fmt.Printf("standby frame persisted (%dx%d source); it will show while the app is disconnected\n", img.Bounds().Dx(), img.Bounds().Dy())
 }

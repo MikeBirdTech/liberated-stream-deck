@@ -96,8 +96,10 @@ sleep in seconds (`0` disables) and is persisted on-device, with
 `FirmwareVersionLD`/`FirmwareVersionAP1`/`FirmwareVersionAP2` (0x04/0x07/0x05,
 version string plus checksum), `UnitSerialNumber` (0x06), and `UnitInfo`
 (0x08: keypad matrix, key/LCD geometry, image gallery). Like all
-documented image commands, the uploads are volatile: use `UploadBootImage`
-when the frame must survive a power cycle. Key, dial, and encoder indexes in
+documented image commands, the uploads are volatile: use
+`SetStandbyImage` with an exact 800x480 image when the disconnected standby
+frame must survive a power cycle. `UploadBootImage` remains as a deprecated
+compatibility wrapper that scales its input. Key, dial, and encoder indexes in
 the library are zero-based physical indexes.
 
 ## Demo
@@ -338,7 +340,7 @@ tested firmware: every value probed (0x00 through 0x06, 2026-08-11, one
 upload per power cycle) persisted and rendered as the power-on frame, last
 upload wins. The earlier "blank boot screen" notes for targets 0x00-0x02
 were an upload-content artifact (wrong chunk header), not type-specific
-slots. `UploadBootImage` sends type 0x05; the resulting frame is what the
+slots. `SetStandbyImage` sends type 0x05; the resulting frame is what the
 documented Show Logo command displays.
 
 > ### Do not send feature report `0x03/0x0C` (factory channel)

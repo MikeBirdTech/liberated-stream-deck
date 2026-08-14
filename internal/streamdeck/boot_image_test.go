@@ -9,12 +9,12 @@ import (
 	"testing"
 )
 
-func TestUploadBootImageWrites089ChunkedFrames(t *testing.T) {
+func TestSetStandbyImageWrites089ChunkedFrames(t *testing.T) {
 	fake := &fakeHIDDevice{}
 	deck := newPlus(fake)
-	img := image.NewNRGBA(image.Rect(0, 0, BootImageWidth, BootImageHeight))
-	if err := deck.UploadBootImage(img); err != nil {
-		t.Fatalf("UploadBootImage: %v", err)
+	img := image.NewNRGBA(image.Rect(0, 0, StandbyImageWidth, StandbyImageHeight))
+	if err := deck.SetStandbyImage(img); err != nil {
+		t.Fatalf("SetStandbyImage: %v", err)
 	}
 	if len(fake.writes) == 0 {
 		t.Fatal("no HID writes")
@@ -51,8 +51,25 @@ func TestUploadBootImageWrites089ChunkedFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reassembled payload is not a valid JPEG: %v", err)
 	}
-	if b := decoded.Bounds(); b.Dx() != BootImageWidth || b.Dy() != BootImageHeight {
+	if b := decoded.Bounds(); b.Dx() != StandbyImageWidth || b.Dy() != StandbyImageHeight {
 		t.Fatalf("decoded image = %v, want 800x480", b)
+	}
+}
+
+func TestSetStandbyImageRejectsInvalidSizeWithoutWriting(t *testing.T) {
+	for _, img := range []image.Image{
+		nil,
+		image.NewNRGBA(image.Rect(0, 0, StandbyImageWidth-1, StandbyImageHeight)),
+		image.NewNRGBA(image.Rect(0, 0, StandbyImageWidth, StandbyImageHeight-1)),
+	} {
+		fake := &fakeHIDDevice{}
+		deck := newPlus(fake)
+		if err := deck.SetStandbyImage(img); err == nil {
+			t.Fatal("SetStandbyImage returned nil error for invalid image")
+		}
+		if len(fake.writes) != 0 {
+			t.Fatalf("invalid image produced %d HID writes", len(fake.writes))
+		}
 	}
 }
 
@@ -77,6 +94,17 @@ func TestUploadBootImageScalesSmallSource(t *testing.T) {
 	}
 	if c := color.NRGBAModel.Convert(decoded.At(0, 0)).(color.NRGBA); c == (color.NRGBA{}) {
 		t.Fatal("scaled image is not opaque-filled")
+	}
+}
+
+func TestUploadBootImageRejectsNilWithoutWriting(t *testing.T) {
+	fake := &fakeHIDDevice{}
+	deck := newPlus(fake)
+	if err := deck.UploadBootImage(nil); err == nil {
+		t.Fatal("UploadBootImage(nil) returned nil error")
+	}
+	if len(fake.writes) != 0 {
+		t.Fatalf("nil image produced %d HID writes", len(fake.writes))
 	}
 }
 
