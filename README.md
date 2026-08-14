@@ -354,6 +354,16 @@ backend reports `Claim` as unsupported; neither operation sends a session
 frame. The earlier wire-protocol interpretation mistook libc++ short-string
 object storage for command framing.
 
+The Plus firmware-update task has also been traced statically. Its
+`20GBD9901` backend streams a selected file verbatim through output command
+`0x05`, using 4096-byte outer blocks and 1008-byte report payloads. This is not
+a validated update path: no genuine firmware artifact or HID capture is
+available, and bootloader entry, image format, authorization and recovery are
+unknown. The library exposes no firmware writer. The read-only
+`deckfwinspect` tool validates and reassembles future raw report captures; see
+[the firmware-update research note](docs/firmware-update-research.md) for the
+byte map, evidence labels and hardware safety gates.
+
 Feature-report setters such as Fill LCD (`0x03/0x05`) are reliable at any
 normal client pacing, but sustained rapid-fire writes have a limit that was
 measured on the real deck (2026-08-11). Verified clean: continuous fills for
@@ -392,8 +402,9 @@ go build ./...
 The tests cover both model routes, Mini snapshot transitions and invalid state
 bytes, exact Mini image and brightness report bytes, Mini BMP orientation and
 bounds, existing Plus input/output behavior, short HID writes, complete UI
-restoration, reconnect sequencing, cancellation, rendering, and idempotent
-close behavior.
+restoration, reconnect sequencing, cancellation, rendering, idempotent close
+behavior, and strict offline validation of the static Plus firmware-capture
+framing.
 
 Automated tests do not replace physical verification of HID permissions, USB
 removal detection, firmware behavior, image orientation and appearance, or
