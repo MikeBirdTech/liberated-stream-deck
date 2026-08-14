@@ -2,13 +2,19 @@
 
 ## Summary
 
-During reverse-engineering of the undocumented comm layer (issue #9), a
-probe sent feature report `0x03/0x0C` with the payload
-`08 4f 00 70 00 65 00 6e 00` (the factory command "Open") to the Stream
-Deck Plus (PID 0x0084, serial originally `A00WA3361NFL4P`, firmware
-AP2 2.0.3.7). The unit de-provisioned: every identity path (USB string,
-getter 0x06) now returns `Invalid SN! ` permanently. Power cycles,
-including a 60-second full drain, do not restore it.
+During reverse-engineering of the undocumented comm layer, a probe sent
+feature report `0x03/0x0C` with the payload
+`08 4f 00 70 00 65 00 6e 00`, an attempted UTF-16 encoding of the host task
+name "Open", to the Stream Deck Plus (PID 0x0084, serial originally
+`A00WA3361NFL4P`, firmware AP2 2.0.3.7). The unit de-provisioned: every
+identity path (USB string, getter 0x06) now returns `Invalid SN! `
+permanently. Power cycles, including a 60-second full drain, do not restore
+it.
+
+Later static analysis disproved the premise behind that probe. The app's
+apparent `[length][name]` value is libc++ short-string object storage used for
+task logging, not a UTF-16 wire command. The destructive device result remains
+real; only the original interpretation of the app-side bytes was wrong.
 
 **This was caused by this project's own probing. The library must never
 send feature report 0x03/0x0C.** See `protocol-undocumented-config.md`.
@@ -28,10 +34,11 @@ send feature report 0x03/0x0C.** See `protocol-undocumented-config.md`.
 1. Feature-report writes on every ID 0x00-0x10 and 0x03/0x01-0x0F with
    serial payloads: u8/u16 lengths, raw ASCII, UTF-16, every offset,
    with and without command bytes.
-2. The factory command channel 0x03/0x0C: 400+ candidate command names
-   ([len][UTF-16 name]); names with inline ASCII serial args; Open->write
-   ->Close sequences; Open followed by an immediate in-session sweep of
-   every write form.
+2. The undocumented factory report 0x03/0x0C: 400+ candidate command-name
+   probes (`[len][UTF-16 name]`); names with inline ASCII serial args;
+   Open->write->Close sequences; Open followed by an immediate sweep of every
+   write form. These were based on the now-disproved wire-format inference and
+   must not be repeated.
 3. Output commands 0x01 (param 0-16), 0x02 (type 0x00-0x1F, 0xFE, 0xFF),
    0x05, 0x09 (types 0x00-0x10), 0x0A with serial payloads, including
    the app's commit controls ([0x0B][0x63][0x02][param-1], [0x03][0x07]).

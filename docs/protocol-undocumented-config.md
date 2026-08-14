@@ -48,12 +48,15 @@ Getters: 0x04 (FW LD), 0x05 (FW AP2), 0x06 (serial), 0x07 (FW AP1),
 
 ## FAULT REPORT - the 0x03/0x0C factory channel
 
-Feature report `0x03/0x0C` is a FACTORY-ONLY command channel that executes
-`[length-byte][UTF-16 command name]` payloads (e.g. `08 4f 00 70 00 65 00
-6e 00` executes the command "Open"). Sending it de-provisions the unit:
-the stored serial is erased and every identity path (USB string, getter
-0x06) returns "Invalid SN! " permanently; a power cycle does not restore
-it. There is NO known restore path: the vendor app contains no serial-write
+Feature report `0x03/0x0C` is a FACTORY-ONLY channel. During protocol
+probing, the payload `08 4f 00 70 00 65 00 6e 00` (an attempted UTF-16
+encoding of "Open") de-provisioned the unit: the stored serial was erased
+and every identity path (USB string, getter 0x06) now returns "Invalid SN! "
+permanently; a power cycle does not restore it. This observation proves that
+the report is dangerous, but not that it is the app's transport for the host
+task named `Open`. The app never sends this report in that task path.
+
+There is NO known restore path: the vendor app contains no serial-write
 command, the community has never documented serial provisioning, and no
 firmware image that documents the write is publicly obtainable.
 
@@ -61,16 +64,41 @@ THIS REPORT MUST NEVER BE SENT BY THIS LIBRARY. The streamdeck library
 does not expose it and never will. Any future protocol work must treat
 feature report 0x03/0x0C as a one-way trip to a de-provisioned unit.
 
-## Comm command vocabulary (UTF-16 session layer)
+## Host task vocabulary (not a wire protocol)
 
-The 20 commands the app can build (length-prefixed UTF-16 names): Open,
-SleepDog, ReadKeys, SetRGB, SetBacklight, UploadLogo, UploadXYWHImage,
-Ping, UpdateFW, ShowLogo, UploadXIImage, Preheat, SetTriggerLevel,
-SetLEDRGB, UploadContext, SetSleepDelay, Claim, SetFullRGB,
-UploadFullImage, SetBSMode. Session status enum: DISCONNECTED, TIMED OUT,
-FAILED, NOT SUPPORTED, NOT OPEN, SUCCESS. Warm-up sequence: Open -> Claim ->
-Preheat -> Read FW -> Read capabilities -> Adjust capabilities -> Read
-serial.
+An earlier static analysis mistook the 20 names built by the app for
+length-prefixed UTF-16 commands. They are host-side task labels: Open,
+SleepDog, ReadKeys, SetRGB, SetBacklight, UploadLogo,
+UploadXYWHImage, Ping, UpdateFW, ShowLogo, UploadXIImage, Preheat,
+SetTriggerLevel, SetLEDRGB, UploadContext, SetSleepDelay, Claim,
+SetFullRGB, UploadFullImage and SetBSMode.
+
+In the x86_64 app, the enum-to-name routine at file offset `0xcb4f40`
+constructs a libc++ short `std::string`. For `Open`, the in-memory bytes begin
+`08 4f 70 65 6e 00`: `0x08` is libc++ short-string metadata (the four-byte
+length shifted left by one), followed by ordinary ASCII. It is neither a
+wire buffer nor UTF-16. Its two callers at `0xcb644c` and `0xcb6bf5` pass the
+result into task logging.
+
+The task implementations dispatch directly to model-specific backend virtual
+methods instead:
+
+- `ESDCommOpenTask` calls backend slot `+0x30`. The HID implementation at
+  `0xd7a7c0` enumerates/opens the HID device and sends no report.
+- `ESDCommKeysClaimTask` calls backend slot `+0xd8`. Every inspected classic
+  HID-derived model inherits the implementation at `0xd7aad0`, which returns
+  `-7` (`NOT SUPPORTED`) and sends no report.
+
+The strings DISCONNECTED, TIMED OUT, FAILED, NOT SUPPORTED, NOT OPEN and
+SUCCESS are likewise host-side status formatting. The warm-up scheduler does
+sequence Open, Claim, Preheat, firmware/capability reads and serial reads, but
+that sequence is an application task graph rather than a single command
+channel.
+
+Consequently there is no Open/Claim wire handshake to add for the HID backend.
+This library already owns the corresponding lifecycle by opening the HID
+handle in `Open`, `OpenModel` or `OpenAny`. It must not attempt to reproduce
+the scheduler by sending feature report `0x03/0x0C`.
 
 ## Reproducibility
 

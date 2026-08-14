@@ -342,12 +342,17 @@ slots. `UploadBootImage` sends type 0x05; the resulting frame is what the
 documented Show Logo command displays.
 
 > ### Do not send feature report `0x03/0x0C` (factory channel)
-> Report `0x03/0x0C` is a factory-only command channel: it executes
-> length-prefixed UTF-16 command names, and sending it (e.g. the command
-> `Open`) permanently de-provisions the unit - the stored serial is erased
-> and cannot be restored by this library, the vendor app, or a power
-> cycle. This library never sends it. See
+> Report `0x03/0x0C` is a factory-only channel. A probe containing an
+> attempted UTF-16 encoding of `Open` permanently de-provisioned the unit -
+> the stored serial was erased and cannot be restored by this library, the
+> vendor app, or a power cycle. This library never sends it. See
 > `docs/protocol-undocumented-config.md` for the full mapped config layer.
+
+The app's `Open`, `Claim` and related names are host-side task labels, not a
+UTF-16 wire protocol. `Open` maps to opening the HID handle and the classic HID
+backend reports `Claim` as unsupported; neither operation sends a session
+frame. The earlier wire-protocol interpretation mistook libc++ short-string
+object storage for command framing.
 
 Feature-report setters such as Fill LCD (`0x03/0x05`) are reliable at any
 normal client pacing, but sustained rapid-fire writes have a limit that was
