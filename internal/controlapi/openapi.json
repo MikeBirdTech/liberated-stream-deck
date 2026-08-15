@@ -1,0 +1,281 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Liberated Stream Deck local control API",
+    "version": "v1",
+    "description": "A hardware-only pixels-in/events-out API. Clients own all presentation and input semantics."
+  },
+  "servers": [
+    {"url": "http://127.0.0.1:28484"}
+  ],
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "The API process is serving.",
+            "content": {"application/json": {"schema": {"type": "object"}}}
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPI",
+        "responses": {
+          "200": {
+            "description": "This OpenAPI document.",
+            "content": {"application/json": {"schema": {"type": "object"}}}
+          }
+        }
+      }
+    },
+    "/v1/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "description": "Configured model capabilities and current connection state.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CapabilitiesResponse"}}}
+          }
+        }
+      }
+    },
+    "/v1/state": {
+      "get": {
+        "operationId": "getState",
+        "responses": {
+          "200": {
+            "description": "Connection and accepted desired-state summary.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/State"}}}
+          }
+        }
+      }
+    },
+    "/v1/commands": {
+      "post": {
+        "operationId": "submitCommands",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandBatch"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Every command was applied to connected hardware.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandAck"}}}
+          },
+          "202": {
+            "description": "Desired state was accepted and queued for hardware reconnect.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommandAck"}}}
+          },
+          "400": {
+            "description": "The command batch is invalid.",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "subscribeEvents",
+        "responses": {
+          "200": {
+            "description": "A live Server-Sent Events stream. Event data uses the Event schema.",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}}
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Image": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mime_type", "data_base64"],
+        "properties": {
+          "revision": {"type": "string", "maxLength": 256},
+          "mime_type": {"type": "string", "enum": ["image/png", "image/jpeg"]},
+          "data_base64": {"type": "string", "contentEncoding": "base64"}
+        }
+      },
+      "SetBrightnessCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "brightness"],
+        "properties": {
+          "type": {"const": "set_brightness"},
+          "brightness": {"type": "integer", "minimum": 0, "maximum": 100}
+        }
+      },
+      "SetKeyImageCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "index", "image"],
+        "properties": {
+          "type": {"const": "set_key_image"},
+          "index": {"type": "integer", "minimum": 0},
+          "image": {"$ref": "#/components/schemas/Image"}
+        }
+      },
+      "SetLCDImageCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "image"],
+        "properties": {
+          "type": {"const": "set_lcd_image"},
+          "image": {"$ref": "#/components/schemas/Image"}
+        }
+      },
+      "SetTouchStripImageCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "image"],
+        "properties": {
+          "type": {"const": "set_touch_strip_image"},
+          "image": {"$ref": "#/components/schemas/Image"}
+        }
+      },
+      "SetTouchStripRegionCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "x", "y", "image"],
+        "properties": {
+          "type": {"const": "set_touch_strip_region"},
+          "x": {"type": "integer", "minimum": 0},
+          "y": {"type": "integer", "minimum": 0},
+          "image": {"$ref": "#/components/schemas/Image"}
+        }
+      },
+      "Command": {
+        "oneOf": [
+          {"$ref": "#/components/schemas/SetBrightnessCommand"},
+          {"$ref": "#/components/schemas/SetKeyImageCommand"},
+          {"$ref": "#/components/schemas/SetLCDImageCommand"},
+          {"$ref": "#/components/schemas/SetTouchStripImageCommand"},
+          {"$ref": "#/components/schemas/SetTouchStripRegionCommand"}
+        ]
+      },
+      "CommandBatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["commands"],
+        "properties": {
+          "request_id": {"type": "string", "maxLength": 256},
+          "commands": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {"$ref": "#/components/schemas/Command"}
+          }
+        }
+      },
+      "CommandAck": {
+        "type": "object",
+        "required": ["api_version", "status", "generation", "connected"],
+        "properties": {
+          "api_version": {"const": "v1"},
+          "request_id": {"type": "string"},
+          "status": {"type": "string", "enum": ["applied", "queued"]},
+          "generation": {"type": "integer", "minimum": 1},
+          "connected": {"type": "boolean"},
+          "message": {"type": "string"}
+        }
+      },
+      "Surface": {
+        "type": "object",
+        "required": ["width", "height"],
+        "properties": {
+          "width": {"type": "integer", "minimum": 1},
+          "height": {"type": "integer", "minimum": 1},
+          "partial_updates": {"type": "boolean"}
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "required": ["model", "key_count", "key", "dial_count", "input_events", "supported_commands"],
+        "properties": {
+          "model": {"type": "string", "enum": ["stream_deck_plus", "stream_deck_mini"]},
+          "key_count": {"type": "integer"},
+          "key": {"$ref": "#/components/schemas/Surface"},
+          "dial_count": {"type": "integer"},
+          "lcd": {"$ref": "#/components/schemas/Surface"},
+          "touch_strip": {"$ref": "#/components/schemas/Surface"},
+          "input_events": {"type": "array", "items": {"type": "string"}},
+          "supported_commands": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "ConnectedDevice": {
+        "type": "object",
+        "required": ["vendor_id", "product_id"],
+        "properties": {
+          "vendor_id": {"type": "integer"},
+          "product_id": {"type": "integer"},
+          "manufacturer": {"type": "string"},
+          "product": {"type": "string"}
+        }
+      },
+      "DesiredState": {
+        "type": "object",
+        "properties": {
+          "brightness": {"type": "integer", "minimum": 0, "maximum": 100},
+          "keys": {"type": "object", "additionalProperties": {"type": "string"}},
+          "lcd_revision": {"type": "string"},
+          "touch_strip_revision": {"type": "string"}
+        }
+      },
+      "CapabilitiesResponse": {
+        "type": "object",
+        "required": ["api_version", "connected", "capabilities"],
+        "properties": {
+          "api_version": {"const": "v1"},
+          "connected": {"type": "boolean"},
+          "capabilities": {"$ref": "#/components/schemas/Capabilities"},
+          "device": {"$ref": "#/components/schemas/ConnectedDevice"}
+        }
+      },
+      "State": {
+        "type": "object",
+        "required": ["api_version", "connected", "capabilities", "generation", "desired"],
+        "properties": {
+          "api_version": {"const": "v1"},
+          "connected": {"type": "boolean"},
+          "capabilities": {"$ref": "#/components/schemas/Capabilities"},
+          "device": {"$ref": "#/components/schemas/ConnectedDevice"},
+          "generation": {"type": "integer", "minimum": 0},
+          "desired": {"$ref": "#/components/schemas/DesiredState"},
+          "last_error": {"type": "string"}
+        }
+      },
+      "Event": {
+        "type": "object",
+        "required": ["sequence", "timestamp", "kind"],
+        "properties": {
+          "sequence": {"type": "integer", "minimum": 1},
+          "timestamp": {"type": "string", "format": "date-time"},
+          "kind": {"type": "string"},
+          "index": {"type": "integer", "minimum": 0},
+          "pressed": {"type": "boolean"},
+          "delta": {"type": "integer"},
+          "x": {"type": "integer"},
+          "y": {"type": "integer"},
+          "start_x": {"type": "integer"},
+          "start_y": {"type": "integer"},
+          "end_x": {"type": "integer"},
+          "end_y": {"type": "integer"},
+          "device": {"$ref": "#/components/schemas/ConnectedDevice"},
+          "message": {"type": "string"}
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["api_version", "error"],
+        "properties": {
+          "api_version": {"const": "v1"},
+          "error": {"type": "string"}
+        }
+      }
+    }
+  }
+}

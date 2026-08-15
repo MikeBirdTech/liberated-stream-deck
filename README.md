@@ -1,9 +1,10 @@
 # Liberated Stream Deck
 
-Liberated Stream Deck is a small Go library and diagnostic demo for controlling
-Elgato Stream Deck hardware directly over USB HID, without requiring the Elgato
-Stream Deck application at runtime. It uses factory firmware; no firmware
-replacement is needed.
+Liberated Stream Deck is a Go hardware-control service and direct-HID library
+for Elgato Stream Deck hardware. Applications provide exact display frames and
+receive normalized physical input without requiring the Elgato Stream Deck
+application at runtime. The service deliberately contains no application,
+workflow, or agent semantics.
 
 ## Status
 
@@ -34,6 +35,8 @@ supported.
 Shared features:
 
 - direct USB HID discovery, input, and output
+- local versioned HTTP control API and Server-Sent Events input stream
+- serialized application command batches with disconnect queueing and reconnect restoration
 - model-aware enumeration and automatic Plus-first connection
 - generated native-size key images
 - brightness control from 0 through 100 percent
@@ -101,6 +104,35 @@ documented image commands, the uploads are volatile: use
 frame must survive a power cycle. `UploadBootImage` remains as a deprecated
 compatibility wrapper that scales its input. Key, dial, and encoder indexes in
 the library are zero-based physical indexes.
+
+## Application control service
+
+`deckd` is the application-facing hardware boundary. Run it with:
+
+```bash
+go run ./cmd/deckd
+```
+
+It listens on `127.0.0.1:28484` by default and exposes:
+
+- `GET /v1/capabilities` for native dimensions and supported operations
+- `GET /v1/openapi.json` for the machine-readable OpenAPI 3.1 contract
+- `POST /v1/commands` for serialized batches of brightness, key, full-LCD,
+  full-strip, and partial-strip commands
+- `GET /v1/state` for the accepted desired hardware state
+- `GET /v1/events` for a low-latency Server-Sent Events stream containing raw
+  normalized key, dial, and touch events
+- `GET /v1/health` for process health
+
+Commands accepted while the device is disconnected are retained and restored
+on reconnect. Client images must already have exact native dimensions; the
+service never invents UI or scales presentation on an application's behalf.
+The complete wire contract and examples are in
+[docs/control-api.md](docs/control-api.md).
+
+`deckdemo` remains available as a diagnostic and compatibility executable. The
+macOS installer continues to run `deckdemo` until deployment is explicitly
+switched to the new API service.
 
 ## Demo
 
@@ -417,7 +449,8 @@ input contention. Current hardware status is recorded in the support matrix.
 
 ## Project scope
 
-This project intentionally remains a small direct-HID library and diagnostic
-demo. Plugin systems, configurable UI frameworks, installers, menu-bar
-packaging, partial strip updates, full-screen LCD commands, and animation
-systems are outside the current scope.
+This project owns the USB HID connection and exposes complete live hardware
+output plus normalized physical input to applications. It does not decide what
+an input means, execute computer actions, generate application layouts, or
+contain AI-agent behavior. Those responsibilities belong to clients of
+`deckd`.
