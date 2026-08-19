@@ -38,6 +38,12 @@ Shared features:
 - generated native-size key images
 - brightness control from 0 through 100 percent
 - first key presses delivered immediately after startup
+- immediate, local press feedback on every LCD key in bridge mode (cached
+  controller-supplied press visuals, or a neutral depression of the current
+  frame), without waiting for the controller
+- opaque per-key visual programs: resting frame, timed animation frames,
+  bounded loops, minimum visible time, deterministic cancellation on a newer
+  revision, one paced scheduler for all key writes
 - unplug/replug recovery with UI and brightness restoration
 - clean, idempotent shutdown
 
@@ -153,6 +159,27 @@ when the variable is set at install time.
   each event ack's `state` object and from periodic GETs on the
   server-chosen `poll_ms` cadence. Page position and key colors are always
   server-derived; the deck never interprets what a key/dial/flick means.
+- revision-3 controllers may also send the complete `keys[]` array (GET and
+  ack `state`), an optional per-key `visual` program (resting frame, press
+  feedback cached before input, timed animation frames with per-frame
+  durations, bounded looping, minimum visible time, content revision), and
+  an optional `generation` for payload ordering. Per physical key the bridge
+  resolves `keys[i]`, then the legacy `key` when its index matches, then
+  `background.keys[i]`, then quiet paper, and repaints only keys whose
+  resolved revision changed - an ack for key 2 repaints key 2, not key 0.
+  Every key-down gets immediate local feedback (the key's cached press
+  visual, or a neutral depression of the frame on the key) before the event
+  POST completes; the ack or next poll supersedes it. The exact additive
+  schema, precedence, playback/cancellation/reconnect semantics, timing
+  limits, examples, and the controller checklist are in
+  [docs/bridge-visual-protocol.md](docs/bridge-visual-protocol.md).
+- All key writes in bridge mode go through one scheduler
+  (`internal/visual`): writes are serialized and paced
+  (`LIBERATED_STREAM_DECK_KEY_MIN_INTERVAL_MS`, 20 ms by default), superseded
+  frames are coalesced rather than queued, a stale animation can never write
+  after a newer revision is accepted, and reconnects restore each key's
+  latest steady state (finite animations settle, loops restart). The
+  scheduler is device-agnostic and not coupled to the HTTP bridge.
 - Any key object (the active `key`, every entry in `background.keys`, and
   keys inside an ack's `state`) may carry an optional `image` object: a
   server-rendered raster frame as base64 PNG/JPEG (`data_b64`), a
