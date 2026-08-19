@@ -24,6 +24,7 @@ import (
 
 	"github.com/MikeBirdTech/liberated-stream-deck/internal/render"
 	"github.com/MikeBirdTech/liberated-stream-deck/internal/streamdeck"
+	"github.com/MikeBirdTech/liberated-stream-deck/internal/visual"
 )
 
 const (
@@ -59,10 +60,27 @@ type demoState struct {
 	pollMS       int
 	bootImageRev int
 
-	// frames caches decoded key raster frames by the server's image revision.
-	// A nil entry records a payload that failed to decode, so a broken frame
-	// is logged once instead of on every poll repaint.
-	frames map[string]image.Image
+	// wireKeys holds the controller's keys[] array by physical index. When an
+	// index is present here it is authoritative; the legacy singular
+	// activeKey and the background frames are fallbacks (see resolveKey).
+	wireKeys map[int]*remoteKey
+	// generation is the newest payload generation applied (0 = unordered).
+	generation int64
+	stalePolls int
+
+	// keyFrames caches decoded native-size key frames by wire revision.
+	keyFrames keyFrameCache
+	// invalidSequences records animation/press payloads already logged as
+	// invalid so a broken sequence is reported once per revision.
+	invalidSequences map[string]struct{}
+
+	// keyVisuals owns every bridge-mode key write: programs, press feedback,
+	// animation pacing, cancellation, and reconnect restoration. Created on
+	// first use; keyVisualErrors carries failed hardware writes back to the
+	// connection loop so they end the connection exactly like a synchronous
+	// write failure used to.
+	keyVisuals      *visual.Scheduler
+	keyVisualErrors chan error
 
 	// stripOutput caches decoded touch-strip frames across connections while
 	// keeping desired and displayed output state serialized and connection-local.
@@ -180,6 +198,7 @@ func run() error {
 }
 
 func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo fetchDemoFunc, retryInterval time.Duration) error {
+	defer state.closeVisuals()
 	for {
 		if ctx.Err() != nil {
 			log.Print("device shutdown reason=interrupt")
@@ -225,6 +244,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		}
 		if setupErr == nil {
 			state.stripOutput.startConnection()
+			state.visuals().Attach(deck)
 			setupErr = restoreDemo(deck, state, info.Model)
 		}
 		if setupErr == nil {
@@ -235,6 +255,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		}
 		if setupErr != nil {
 			log.Printf("device setup failed retry=%s error=%q", retryInterval, setupErr)
+			state.visuals().Detach()
 			if closeErr := deck.Close(); closeErr != nil {
 				log.Printf("device close error=%q", closeErr)
 			}
@@ -264,6 +285,9 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		}
 
 		connectionErr := runConnected(ctx, deck, state, info.Model, fetchDemo)
+		// Stop the scheduler's writes before anything else touches the keys
+		// or the handle is closed; programs survive for the next connection.
+		state.visuals().Detach()
 		if ctx.Err() != nil && state.bridge {
 			// Best-effort: repaint every key from the server background so the
 			// frames persisted in the device (shown at next power-on) are
@@ -296,6 +320,8 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 	connectionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	eventResults := make(chan eventPostResult, 64)
+	state.visuals()
+	keyWriteErrors := state.keyVisualErrors
 
 	var pollResults chan pollResult
 	var stopPoll func()
@@ -327,6 +353,10 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 				return err
 			}
 			continue
+		case err := <-keyWriteErrors:
+			// A failed key write ends the connection exactly as a synchronous
+			// write failure did; the reconnect path restores every key.
+			return err
 		default:
 		}
 
@@ -340,10 +370,18 @@ func runConnected(ctx context.Context, deck demoDeck, state *demoState, model st
 		logInputDiagnostics(result)
 		for _, event := range result.Events {
 			if state.bridge {
-				// Pure renderer: no local interpretation or rerender. Log the
-				// raw event, POST it, and let the ack/poll bring the new
-				// server-owned state.
+				// Pure renderer: no local interpretation. Log the raw event,
+				// give the key its cached press feedback immediately (the
+				// controller's ack supersedes it), POST the event, and let
+				// the ack/poll bring the new server-owned state.
 				logBridgeInput(state, event)
+				if key, ok := event.(streamdeck.KeyEvent); ok {
+					if key.Pressed {
+						state.visuals().Press(key.Key)
+					} else {
+						state.visuals().Release(key.Key)
+					}
+				}
 			} else if err := handleEvent(deck, state, model, event); err != nil {
 				return err
 			}
@@ -410,24 +448,53 @@ func handlePollResult(deck demoDeck, state *demoState, model streamdeck.Model, p
 func handleAck(deck demoDeck, state *demoState, model streamdeck.Model, ack eventAck) error {
 	state.remoteEventsSeen = ack.EventsSeen
 	state.remoteLast = lastEventMessage(ack.Message)
+	log.Printf("demo ack events_seen=%d message=%q", ack.EventsSeen, ack.Message)
 	if ack.State != nil {
-		if ack.State.Key != nil {
-			state.activeKey = ack.State.Key
-		}
-		if ack.State.Strip != nil {
-			state.activeStrip = ack.State.Strip
+		if !state.acceptGeneration(ack.State.Generation, false) {
+			log.Printf("demo ack state ignored generation=%d newest=%d", ack.State.Generation, state.generation)
+		} else {
+			if ack.State.Key != nil {
+				state.activeKey = ack.State.Key
+			}
+			// An ack's keys[] merges by index: every key it names is
+			// authoritative, keys it omits keep their current presentation.
+			state.applyWireKeys(ack.State.Keys, false)
+			if ack.State.Strip != nil {
+				state.activeStrip = ack.State.Strip
+			}
 		}
 	}
-	log.Printf("demo ack events_seen=%d message=%q", ack.EventsSeen, ack.Message)
 	if err := renderStrip(deck, state, model); err != nil {
 		return err
 	}
-	if state.bridge && state.activeKey != nil {
-		if err := renderKey(deck, state, model, state.activeKey.Index); err != nil {
-			return err
-		}
+	if state.bridge {
+		state.syncKeys(model)
 	}
 	return nil
+}
+
+// acceptGeneration reports whether a payload with the given generation is at
+// least as new as the newest applied. Zero (absent) always passes. A stale
+// ack is dropped; a stale poll is dropped too, but three stale polls in a row
+// mean the controller restarted its counter, so the third resynchronizes.
+func (s *demoState) acceptGeneration(generation int64, poll bool) bool {
+	if generation <= 0 {
+		return true
+	}
+	if s.generation <= 0 || generation >= s.generation {
+		s.generation = generation
+		s.stalePolls = 0
+		return true
+	}
+	if poll {
+		s.stalePolls++
+		if s.stalePolls >= 3 {
+			s.generation = generation
+			s.stalePolls = 0
+			return true
+		}
+	}
+	return false
 }
 
 // handlePoll applies one bridge-mode GET and re-renders from the server state.
@@ -435,6 +502,10 @@ func handleAck(deck demoDeck, state *demoState, model streamdeck.Model, ack even
 // render untouched; the poller will keep trying at its current cadence.
 func handlePoll(deck demoDeck, state *demoState, model streamdeck.Model, demo remoteDemo) error {
 	if !isBridgeDemo(demo) {
+		return nil
+	}
+	if !state.acceptGeneration(demo.Generation, true) {
+		log.Printf("demo poll ignored generation=%d newest=%d", demo.Generation, state.generation)
 		return nil
 	}
 	wasBridge := state.bridge
@@ -457,11 +528,7 @@ func handlePoll(deck demoDeck, state *demoState, model streamdeck.Model, demo re
 	if err := renderStrip(deck, state, model); err != nil {
 		return err
 	}
-	if state.activeKey != nil {
-		if err := renderKey(deck, state, model, state.activeKey.Index); err != nil {
-			return err
-		}
-	}
+	state.syncKeys(model)
 	return nil
 }
 
@@ -529,6 +596,8 @@ func applyRemoteDemo(state *demoState, demo remoteDemo) error {
 	if isBridgeDemo(demo) {
 		state.bridge = true
 		state.activeKey = demo.Key
+		// A GET is a complete snapshot: its keys[] replaces the stored array.
+		state.applyWireKeys(demo.Keys, true)
 		state.activeStrip = demo.Strip
 		state.pollMS = demo.PollMS
 		if demo.Background != nil {
@@ -546,6 +615,7 @@ func applyRemoteDemo(state *demoState, demo remoteDemo) error {
 	// revision < 2 or missing bridge fields: keep the classic rev-1 demo.
 	state.bridge = false
 	state.activeKey = nil
+	state.wireKeys = nil
 	state.activeStrip = nil
 	state.background = nil
 	state.pollMS = 0
@@ -559,7 +629,7 @@ func applyRemoteDemo(state *demoState, demo remoteDemo) error {
 }
 
 func isBridgeDemo(demo remoteDemo) bool {
-	return demo.Revision >= 2 && demo.Key != nil && demo.Strip != nil && demo.PollMS > 0
+	return demo.Revision >= 2 && (demo.Key != nil || len(demo.Keys) > 0) && demo.Strip != nil && demo.PollMS > 0
 }
 
 func handleEvent(deck demoDeck, state *demoState, model streamdeck.Model, event streamdeck.Event) error {
@@ -660,15 +730,12 @@ func handleEvent(deck demoDeck, state *demoState, model streamdeck.Model, event 
 
 func renderKey(deck demoDeck, state *demoState, model streamdeck.Model, index int) error {
 	if state.bridge {
-		// Pure renderer: paint exactly what the server sent. The active key
-		// carries its wire frame; every other key paints the server
-		// background frame for its index, or quiet paper when the server
-		// provides none.
-		key := state.activeKey
-		if key == nil || key.Index != index {
-			key = backgroundFrame(state.background, index)
-		}
-		return renderWireKey(deck, state, model, index, key)
+		// Pure renderer: hand the scheduler exactly what the server sent for
+		// this physical key (keys[] entry, legacy active key, background
+		// frame, or quiet paper). The scheduler paints it when its revision
+		// changes and owns any animation or press feedback it carries.
+		state.syncKey(model, index)
+		return nil
 	}
 	width, height := model.KeyImageSize()
 	view := render.KeyView{Index: index, On: state.keys[index], Selected: index == state.selectedKey}
@@ -679,54 +746,18 @@ func renderKey(deck demoDeck, state *demoState, model streamdeck.Model, index in
 	return nil
 }
 
-// renderWireKey paints one server-owned key. A decodable raster frame is
-// scaled to the native key size and painted verbatim; otherwise the semantic
-// label/bg/fg fallback is drawn (quiet paper when key is nil).
+// renderWireKey paints one server-owned key's resting frame directly (used
+// only while the scheduler is detached, e.g. to persist background frames at
+// shutdown). A decodable raster frame is scaled to the native key size and
+// painted verbatim; otherwise the semantic label/bg/fg fallback is drawn
+// (quiet paper when key is nil).
 func renderWireKey(deck demoDeck, state *demoState, model streamdeck.Model, index int, key *remoteKey) error {
 	width, height := model.KeyImageSize()
-	var img image.Image
-	if frame := state.imageFrame(key); frame != nil {
-		img = streamdeck.ScaleImage(frame, width, height)
-	} else {
-		view := render.KeyView{Index: index, BG: bridgePaperBG}
-		if key != nil {
-			view.Label = key.Label
-			view.BG, view.FG = keyRenderColors(key)
-		}
-		img = render.KeySize(view, width, height)
-	}
+	img := state.restFrame(key, index, width, height)
 	if err := deck.SetKeyImage(index, img); err != nil {
 		return fmt.Errorf("render key %d: %w", index+1, err)
 	}
 	return nil
-}
-
-// imageFrame returns the decoded raster frame carried by a wire key, or nil
-// when the key has no image or its payload cannot be decoded — the caller
-// then falls back to the semantic label/bg/fg rendering. Decoded frames are
-// cached by the server's content revision (including failures); a payload
-// without a revision is decoded every time rather than cached.
-func (s *demoState) imageFrame(key *remoteKey) image.Image {
-	if key == nil || key.Image == nil || key.Image.Data == "" {
-		return nil
-	}
-	revision := key.Image.Revision
-	if revision != "" {
-		if frame, cached := s.frames[revision]; cached {
-			return frame
-		}
-	}
-	frame, err := decodeImageFrame(key.Image)
-	if err != nil {
-		log.Printf("bridge key %d image ignored: %v", key.Index+1, err)
-	}
-	if revision != "" {
-		if s.frames == nil || len(s.frames) >= frameCacheLimit {
-			s.frames = make(map[string]image.Image)
-		}
-		s.frames[revision] = frame
-	}
-	return frame
 }
 
 // decodeImageFrame decodes a wire image payload (base64-encoded PNG or JPEG).

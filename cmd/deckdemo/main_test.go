@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -201,11 +202,19 @@ type fakeDemoDeck struct {
 	brightnessCalls []int
 	keyImages       map[int]image.Image
 	keyImageCalls   int
+	keyImageLog     []fakeKeyWrite
+	keyImageErr     error
+	onKeyImage      func(int, image.Image)
 	stripImages     []image.Image
 	stripRegions    []fakeStripRegion
 	closeCalls      int
 	onStripImage    func()
 	bootImages      []image.Image
+}
+
+type fakeKeyWrite struct {
+	index int
+	img   image.Image
 }
 
 type fakeStripRegion struct {
@@ -236,27 +245,106 @@ func (d *fakeDemoDeck) ReadEvents(time.Duration) (streamdeck.InputRead, error) {
 }
 
 func (d *fakeDemoDeck) SetBrightness(percent int) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.brightnessCalls = append(d.brightnessCalls, percent)
 	return nil
 }
 
+// SetKeyImage is called from the key scheduler goroutine in bridge mode, so
+// it (and the accessors below) lock.
 func (d *fakeDemoDeck) SetKeyImage(index int, img image.Image) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.keyImageErr != nil {
+		return d.keyImageErr
+	}
 	d.keyImageCalls++
 	d.keyImages[index] = img
+	d.keyImageLog = append(d.keyImageLog, fakeKeyWrite{index: index, img: img})
+	if d.onKeyImage != nil {
+		d.onKeyImage(index, img)
+	}
 	return nil
 }
 
 func (d *fakeDemoDeck) SetTouchStripImage(img image.Image) error {
+	d.mu.Lock()
 	d.stripImages = append(d.stripImages, img)
-	if d.onStripImage != nil {
-		d.onStripImage()
+	onStripImage := d.onStripImage
+	d.mu.Unlock()
+	if onStripImage != nil {
+		onStripImage()
 	}
 	return nil
 }
 
 func (d *fakeDemoDeck) SetPartialWindowImage(x, y int, img image.Image) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.stripRegions = append(d.stripRegions, fakeStripRegion{x: x, y: y, img: img})
 	return nil
+}
+
+// keyImage returns the latest frame written to a key (nil when none).
+func (d *fakeDemoDeck) keyImage(index int) image.Image {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.keyImages[index]
+}
+
+func (d *fakeDemoDeck) keyWrites() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.keyImageCalls
+}
+
+func (d *fakeDemoDeck) keyCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.keyImages)
+}
+
+// keyWriteLog returns every key write in order.
+func (d *fakeDemoDeck) keyWriteLog() []fakeKeyWrite {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]fakeKeyWrite(nil), d.keyImageLog...)
+}
+
+func (d *fakeDemoDeck) stripCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.stripImages)
+}
+
+// waitKeyWrites blocks until the deck has seen at least n key writes.
+func (d *fakeDemoDeck) waitKeyWrites(t *testing.T, n int) {
+	t.Helper()
+	waitUntil(t, fmt.Sprintf("%d key writes (have %d)", n, d.keyWrites()), func() bool { return d.keyWrites() >= n })
+}
+
+// waitUntil polls cond until it holds or the deadline passes.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// settle waits until no key writes have happened for a short quiet window.
+func (d *fakeDemoDeck) settle() {
+	for {
+		before := d.keyWrites()
+		time.Sleep(30 * time.Millisecond)
+		if d.keyWrites() == before {
+			return
+		}
+	}
 }
 
 func (d *fakeDemoDeck) Close() error {
@@ -267,6 +355,14 @@ func (d *fakeDemoDeck) Close() error {
 func (d *fakeDemoDeck) UploadBootImage(img image.Image) error {
 	d.bootImages = append(d.bootImages, img)
 	return nil
+}
+
+// attachBridge binds the state's key scheduler to a fake deck for the test's
+// lifetime. Bridge-mode key writes are asynchronous, so tests wait on the deck.
+func attachBridge(t *testing.T, state *demoState, deck *fakeDemoDeck) {
+	t.Helper()
+	state.visuals().Attach(deck)
+	t.Cleanup(state.closeVisuals)
 }
 
 func assertImagesEqual(t *testing.T, got, want image.Image, name string) {
@@ -348,15 +444,17 @@ func TestBridgeRestoreRendersServerKeyAndQuietPeers(t *testing.T) {
 		activeStrip: &remoteStrip{Page: 0, Pages: 3, Title: "Today", Lines: []string{"Demo Task: idle"}},
 	}
 	deck := newFakeDemoDeck()
+	attachBridge(t, state, deck)
 	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
 		t.Fatalf("restoreDemo: %v", err)
 	}
+	deck.waitKeyWrites(t, streamdeck.KeyCount)
 
 	wantActive := render.KeySize(render.KeyView{Index: 0, Label: "Demo Task", BG: bridgePaperBG, FG: bridgePaperInk}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
-	assertImagesEqual(t, deck.keyImages[0], wantActive, "bridge active key")
+	assertImagesEqual(t, deck.keyImage(0), wantActive, "bridge active key")
 	for index := 1; index < streamdeck.KeyCount; index++ {
 		wantQuiet := render.KeySize(render.KeyView{Index: index, BG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
-		assertImagesEqual(t, deck.keyImages[index], wantQuiet, "quiet key")
+		assertImagesEqual(t, deck.keyImage(index), wantQuiet, "quiet key")
 	}
 	wantStrip := render.Strip(render.StripView{Title: "Today", Lines: []string{"Demo Task: idle"}, Page: 0, Pages: 3})
 	assertImagesEqual(t, deck.stripImages[0], wantStrip, "bridge strip")
@@ -370,10 +468,12 @@ func TestBridgeAckRepaintsKeyAndStripFromState(t *testing.T) {
 		activeKey:   &remoteKey{Index: 0, Label: "Demo Task", State: "idle", BG: "#F6F5EE", FG: "#272C24"},
 		activeStrip: &remoteStrip{Page: 0, Pages: 3, Title: "Today", Lines: []string{"Demo Task: idle"}},
 	}
+	attachBridge(t, state, deck)
 	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
 		t.Fatalf("restoreDemo: %v", err)
 	}
-	before := len(deck.stripImages)
+	deck.waitKeyWrites(t, streamdeck.KeyCount)
+	before := deck.stripCount()
 
 	ackState := &remoteState{
 		Key:   &remoteKey{Index: 0, Label: "Demo Task", State: "running", BG: "#6FA25C", FG: "#F6F5EE"},
@@ -389,13 +489,14 @@ func TestBridgeAckRepaintsKeyAndStripFromState(t *testing.T) {
 	if state.activeKey.State != "running" || state.activeKey.BG != "#6FA25C" {
 		t.Fatalf("ack key not adopted: %+v", state.activeKey)
 	}
+	deck.waitKeyWrites(t, streamdeck.KeyCount+1)
 	wantBG, _ := keyRenderColors(ackState.Key)
-	got := color.NRGBAModel.Convert(deck.keyImages[0].At(60, 60)).(color.NRGBA)
+	got := color.NRGBAModel.Convert(deck.keyImage(0).At(60, 60)).(color.NRGBA)
 	if got != color.NRGBAModel.Convert(wantBG).(color.NRGBA) {
 		t.Fatalf("key 0 background = %#v, want leaf %#v", got, wantBG)
 	}
-	if len(deck.stripImages) != before+1 {
-		t.Fatalf("strip images = %d, want %d", len(deck.stripImages), before+1)
+	if deck.stripCount() != before+1 {
+		t.Fatalf("strip images = %d, want %d", deck.stripCount(), before+1)
 	}
 }
 
@@ -408,9 +509,11 @@ func TestBridgePollAdoptsAndRepaintsServerState(t *testing.T) {
 		activeKey:   &remoteKey{Index: 0, Label: "Demo Task", State: "idle", BG: "#F6F5EE", FG: "#272C24"},
 		activeStrip: &remoteStrip{Page: 0, Pages: 3, Title: "Today", Lines: []string{"Demo Task: idle"}},
 	}
+	attachBridge(t, state, deck)
 	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
 		t.Fatalf("restoreDemo: %v", err)
 	}
+	deck.waitKeyWrites(t, streamdeck.KeyCount)
 
 	poll := remoteDemo{Revision: 2, PollMS: 3000, EventsSeen: 9}
 	poll.Key = &remoteKey{Index: 0, Label: "Demo Task", State: "success", BG: "#55764A", FG: "#F6F5EE"}
@@ -424,8 +527,9 @@ func TestBridgePollAdoptsAndRepaintsServerState(t *testing.T) {
 	if state.activeStrip == nil || state.activeStrip.Page != 1 || state.activeStrip.Title != "Next meeting" {
 		t.Fatalf("poll strip not adopted: %+v", state.activeStrip)
 	}
+	deck.waitKeyWrites(t, streamdeck.KeyCount+1)
 	wantBG, _ := keyRenderColors(poll.Key)
-	got := color.NRGBAModel.Convert(deck.keyImages[0].At(60, 60)).(color.NRGBA)
+	got := color.NRGBAModel.Convert(deck.keyImage(0).At(60, 60)).(color.NRGBA)
 	if got != color.NRGBAModel.Convert(wantBG).(color.NRGBA) {
 		t.Fatalf("key 0 background = %#v, want moss %#v", got, wantBG)
 	}
@@ -467,12 +571,13 @@ func TestRunConnectedRecoversLocalFallbackToBridge(t *testing.T) {
 
 	deck := newFakeDemoDeck()
 	state := &demoState{brightness: 50, pollMS: 1}
+	attachBridge(t, state, deck)
 	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
 		t.Fatalf("initial local restore: %v", err)
 	}
 	initialBrightnessCalls := len(deck.brightnessCalls)
-	initialKeyWrites := deck.keyImageCalls
-	initialStripWrites := len(deck.stripImages)
+	initialKeyWrites := deck.keyWrites()
+	initialStripWrites := deck.stripCount()
 
 	demo := remoteDemo{Revision: 3, PollMS: 5000, EventsSeen: 12}
 	demo.Presentation.Brightness = 65
@@ -502,16 +607,18 @@ func TestRunConnectedRecoversLocalFallbackToBridge(t *testing.T) {
 	if state.brightness != 65 || len(deck.brightnessCalls) != initialBrightnessCalls+1 || deck.brightnessCalls[len(deck.brightnessCalls)-1] != 65 {
 		t.Fatalf("brightness was not restored from bridge: state=%d calls=%v", state.brightness, deck.brightnessCalls)
 	}
-	if len(deck.keyImages) != streamdeck.KeyCount || deck.keyImageCalls != initialKeyWrites+streamdeck.KeyCount {
-		t.Fatalf("bridge recovery keys = %d writes=%d, want %d keys and %d new writes", len(deck.keyImages), deck.keyImageCalls, streamdeck.KeyCount, streamdeck.KeyCount)
+	deck.waitKeyWrites(t, initialKeyWrites+streamdeck.KeyCount)
+	deck.settle()
+	if deck.keyCount() != streamdeck.KeyCount || deck.keyWrites() != initialKeyWrites+streamdeck.KeyCount {
+		t.Fatalf("bridge recovery keys = %d writes=%d, want %d keys and %d new writes", deck.keyCount(), deck.keyWrites(), streamdeck.KeyCount, streamdeck.KeyCount)
 	}
-	if len(deck.stripImages) != initialStripWrites+1 {
-		t.Fatalf("bridge recovery strip writes = %d, want %d", len(deck.stripImages), initialStripWrites+1)
+	if deck.stripCount() != initialStripWrites+1 {
+		t.Fatalf("bridge recovery strip writes = %d, want %d", deck.stripCount(), initialStripWrites+1)
 	}
 	wantActive := render.KeySize(render.KeyView{Index: 0, Label: "Volume", BG: color.NRGBA{R: 0x55, G: 0x76, B: 0x4a, A: 0xff}, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
-	assertImagesEqual(t, deck.keyImages[0], wantActive, "recovered bridge active key")
+	assertImagesEqual(t, deck.keyImage(0), wantActive, "recovered bridge active key")
 	wantBackground := render.KeySize(render.KeyView{Index: 1, Label: "Mute", BG: bridgePaperInk, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
-	assertImagesEqual(t, deck.keyImages[1], wantBackground, "recovered bridge background key")
+	assertImagesEqual(t, deck.keyImage(1), wantBackground, "recovered bridge background key")
 }
 
 func TestBridgePollFailureRetainsStateUntilRecovery(t *testing.T) {
@@ -527,12 +634,14 @@ func TestBridgePollFailureRetainsStateUntilRecovery(t *testing.T) {
 		background:  originalBackground,
 		pollMS:      2000,
 	}
+	attachBridge(t, state, deck)
 	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
 		t.Fatalf("initial bridge restore: %v", err)
 	}
+	deck.waitKeyWrites(t, streamdeck.KeyCount)
 	brightnessCalls := len(deck.brightnessCalls)
-	keyWrites := deck.keyImageCalls
-	stripWrites := len(deck.stripImages)
+	keyWrites := deck.keyWrites()
+	stripWrites := deck.stripCount()
 
 	if err := handlePollResult(deck, state, streamdeck.ModelPlus, pollResult{err: errors.New("controller restarting")}); err != nil {
 		t.Fatalf("failed poll: %v", err)
@@ -540,8 +649,9 @@ func TestBridgePollFailureRetainsStateUntilRecovery(t *testing.T) {
 	if !state.bridge || state.activeKey != originalKey || state.activeStrip != originalStrip || len(state.background) != 1 || state.background[0] != originalBackground[0] || state.brightness != 60 || state.pollMS != 2000 {
 		t.Fatalf("failed poll changed bridge state: %+v", state)
 	}
-	if len(deck.brightnessCalls) != brightnessCalls || deck.keyImageCalls != keyWrites || len(deck.stripImages) != stripWrites {
-		t.Fatalf("failed poll repainted output: brightness=%v keys=%d strips=%d", deck.brightnessCalls, deck.keyImageCalls, len(deck.stripImages))
+	deck.settle()
+	if len(deck.brightnessCalls) != brightnessCalls || deck.keyWrites() != keyWrites || deck.stripCount() != stripWrites {
+		t.Fatalf("failed poll repainted output: brightness=%v keys=%d strips=%d", deck.brightnessCalls, deck.keyWrites(), deck.stripCount())
 	}
 
 	recovered := remoteDemo{Revision: 3, PollMS: 3000, EventsSeen: 13}
@@ -557,8 +667,21 @@ func TestBridgePollFailureRetainsStateUntilRecovery(t *testing.T) {
 	if state.brightness != 70 || len(deck.brightnessCalls) != brightnessCalls+1 || deck.brightnessCalls[len(deck.brightnessCalls)-1] != 70 {
 		t.Fatalf("recovery brightness = %d calls=%v", state.brightness, deck.brightnessCalls)
 	}
-	if len(deck.stripImages) != stripWrites+1 {
-		t.Fatalf("recovery strip writes = %d, want %d", len(deck.stripImages), stripWrites+1)
+	if deck.stripCount() != stripWrites+1 {
+		t.Fatalf("recovery strip writes = %d, want %d", deck.stripCount(), stripWrites+1)
+	}
+	// Only changed keys repaint: key 0 (new state) and key 1 (the recovered
+	// poll carries no background, so "Mute" returns to quiet paper). The
+	// other six keys are unchanged quiet paper and stay silent.
+	deck.waitKeyWrites(t, keyWrites+2)
+	deck.settle()
+	if deck.keyWrites() != keyWrites+2 {
+		t.Fatalf("recovery key writes = %d, want exactly two changed keys", deck.keyWrites()-keyWrites)
+	}
+	for _, w := range deck.keyWriteLog()[keyWrites:] {
+		if w.index != 0 && w.index != 1 {
+			t.Fatalf("unchanged key %d repainted", w.index)
+		}
 	}
 }
 
@@ -651,21 +774,23 @@ func TestBridgeRestoreRendersBackgroundFrames(t *testing.T) {
 		},
 	}
 	deck := newFakeDemoDeck()
+	attachBridge(t, state, deck)
 	if err := restoreDemo(deck, state, streamdeck.ModelPlus); err != nil {
 		t.Fatalf("restoreDemo: %v", err)
 	}
+	deck.waitKeyWrites(t, streamdeck.KeyCount)
 
 	wantActive := render.KeySize(render.KeyView{Index: 0, Label: "Demo Task", BG: bridgePaperBG, FG: bridgePaperInk}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
-	assertImagesEqual(t, deck.keyImages[0], wantActive, "active key wins")
+	assertImagesEqual(t, deck.keyImage(0), wantActive, "active key wins")
 
 	wantBG1 := render.KeySize(render.KeyView{Index: 1, Label: "Pi 4", BG: bridgePaperInk, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
-	assertImagesEqual(t, deck.keyImages[1], wantBG1, "background frame key 1")
+	assertImagesEqual(t, deck.keyImage(1), wantBG1, "background frame key 1")
 
 	wantBG2 := render.KeySize(render.KeyView{Index: 2, Label: "Pi Zero", BG: bridgePaperInk, FG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
-	assertImagesEqual(t, deck.keyImages[2], wantBG2, "background frame key 2")
+	assertImagesEqual(t, deck.keyImage(2), wantBG2, "background frame key 2")
 
 	wantQuiet := render.KeySize(render.KeyView{Index: 3, BG: bridgePaperBG}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
-	assertImagesEqual(t, deck.keyImages[3], wantQuiet, "uncovered key stays quiet paper")
+	assertImagesEqual(t, deck.keyImage(3), wantQuiet, "uncovered key stays quiet paper")
 }
 
 func TestRenderBackgroundKeysPersistsEveryKey(t *testing.T) {
@@ -784,7 +909,7 @@ func testFrame(revision string, width, height int, c color.NRGBA) *remoteImage {
 
 func keyPixel(t *testing.T, deck *fakeDemoDeck, index, x, y int) color.NRGBA {
 	t.Helper()
-	img := deck.keyImages[index]
+	img := deck.keyImage(index)
 	if img == nil {
 		t.Fatalf("key %d has no image", index)
 	}
@@ -801,13 +926,15 @@ func TestBridgeRenderPaintsKeyImageFrame(t *testing.T) {
 		},
 	}
 	deck := newFakeDemoDeck()
+	attachBridge(t, state, deck)
 	if err := renderKey(deck, state, streamdeck.ModelPlus, 0); err != nil {
 		t.Fatalf("renderKey: %v", err)
 	}
+	deck.waitKeyWrites(t, 1)
 	if got := keyPixel(t, deck, 0, 60, 60); got != red {
 		t.Fatalf("key 0 pixel = %#v, want image red %#v", got, red)
 	}
-	if b := deck.keyImages[0].Bounds(); b.Dx() != streamdeck.KeyImageWidth || b.Dy() != streamdeck.KeyImageHeight {
+	if b := deck.keyImage(0).Bounds(); b.Dx() != streamdeck.KeyImageWidth || b.Dy() != streamdeck.KeyImageHeight {
 		t.Fatalf("key 0 bounds = %v, want native %dx%d", b, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
 	}
 }
@@ -819,10 +946,12 @@ func TestBridgeRenderScalesImageToNativeKeySize(t *testing.T) {
 		activeKey: &remoteKey{Index: 0, Label: "Tiny", Image: testFrame("rev-tiny", 2, 2, moss)},
 	}
 	deck := newFakeDemoDeck()
+	attachBridge(t, state, deck)
 	if err := renderKey(deck, state, streamdeck.ModelPlus, 0); err != nil {
 		t.Fatalf("renderKey: %v", err)
 	}
-	if b := deck.keyImages[0].Bounds(); b.Dx() != streamdeck.KeyImageWidth || b.Dy() != streamdeck.KeyImageHeight {
+	deck.waitKeyWrites(t, 1)
+	if b := deck.keyImage(0).Bounds(); b.Dx() != streamdeck.KeyImageWidth || b.Dy() != streamdeck.KeyImageHeight {
 		t.Fatalf("key 0 bounds = %v, want scaled to %dx%d", b, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
 	}
 	if got := keyPixel(t, deck, 0, 60, 60); got != moss {
@@ -839,47 +968,71 @@ func TestBridgeRenderFallsBackOnInvalidImage(t *testing.T) {
 		},
 	}
 	deck := newFakeDemoDeck()
+	attachBridge(t, state, deck)
 	if err := renderKey(deck, state, streamdeck.ModelPlus, 0); err != nil {
 		t.Fatalf("renderKey: %v", err)
 	}
+	deck.waitKeyWrites(t, 1)
 	want := render.KeySize(render.KeyView{Index: 0, Label: "Start", BG: bridgePaperBG, FG: bridgePaperInk}, streamdeck.KeyImageWidth, streamdeck.KeyImageHeight)
-	assertImagesEqual(t, deck.keyImages[0], want, "semantic fallback")
+	assertImagesEqual(t, deck.keyImage(0), want, "semantic fallback")
 }
 
-func TestImageFrameCachesByRevision(t *testing.T) {
+func TestNativeFrameCachesByRevision(t *testing.T) {
 	red := color.NRGBA{R: 0xd0, G: 0x20, B: 0x10, A: 255}
 	green := color.NRGBA{R: 0x10, G: 0xa0, B: 0x20, A: 255}
 	state := &demoState{}
+	w, h := streamdeck.KeyImageWidth, streamdeck.KeyImageHeight
 
-	key := &remoteKey{Index: 0, Image: testFrame("rev-1", 4, 4, red)}
-	first := state.imageFrame(key)
+	first := state.nativeFrame(0, "image", testFrame("rev-1", 4, 4, red), w, h)
 	if first == nil {
 		t.Fatal("first decode returned nil")
+	}
+	if b := first.Bounds(); b.Dx() != w || b.Dy() != h {
+		t.Fatalf("cached frame bounds = %v, want native %dx%d", b, w, h)
 	}
 
 	// Same revision with different bytes must serve the cached frame: the
 	// revision is the server's content digest and is trusted as the identity.
-	key.Image = testFrame("rev-1", 4, 4, green)
-	cached := state.imageFrame(key)
-	if cached != first {
+	if cached := state.nativeFrame(0, "image", testFrame("rev-1", 4, 4, green), w, h); cached != first {
 		t.Fatal("same revision was re-decoded instead of served from cache")
 	}
+	// A revision-only reference resolves against the cache.
+	if ref := state.nativeFrame(0, "image", &remoteImage{Revision: "rev-1"}, w, h); ref != first {
+		t.Fatal("revision-only reference did not resolve from cache")
+	}
+	// An unknown revision-only reference is nil (invalid), not an error.
+	if state.nativeFrame(0, "image", &remoteImage{Revision: "rev-unknown"}, w, h) != nil {
+		t.Fatal("unknown revision reference resolved to a frame")
+	}
 
-	key.Image = testFrame("rev-2", 4, 4, green)
-	fresh := state.imageFrame(key)
+	fresh := state.nativeFrame(0, "image", testFrame("rev-2", 4, 4, green), w, h)
 	if fresh == nil || fresh == first {
 		t.Fatal("new revision did not decode a fresh frame")
 	}
 
 	// A failed decode is cached too, so a broken payload is not re-decoded
 	// (or re-logged) on every repaint.
-	key.Image = &remoteImage{Revision: "rev-bad", Data: "!!!not-base64!!!"}
-	if state.imageFrame(key) != nil {
+	if state.nativeFrame(0, "image", &remoteImage{Revision: "rev-bad", Data: "!!!not-base64!!!"}, w, h) != nil {
 		t.Fatal("broken payload decoded to a frame")
 	}
-	key.Image = testFrame("rev-bad", 4, 4, red)
-	if state.imageFrame(key) != nil {
+	if state.nativeFrame(0, "image", testFrame("rev-bad", 4, 4, red), w, h) != nil {
 		t.Fatal("cached decode failure was retried for the same revision")
+	}
+}
+
+func TestKeyFrameCacheEvictsOldest(t *testing.T) {
+	var cache keyFrameCache
+	for i := 0; i < keyFrameCacheLimit+5; i++ {
+		cache.put(fmt.Sprintf("rev-%d", i), image.NewRGBA(image.Rect(0, 0, 1, 1)))
+	}
+	if len(cache.frames) != keyFrameCacheLimit || len(cache.order) != keyFrameCacheLimit {
+		t.Fatalf("cache size = %d/%d, want %d", len(cache.frames), len(cache.order), keyFrameCacheLimit)
+	}
+	if _, ok := cache.get("rev-0"); ok {
+		t.Fatal("oldest entry survived eviction")
+	}
+	if _, ok := cache.get(fmt.Sprintf("rev-%d", keyFrameCacheLimit+4)); !ok {
+		t.Fatal("newest entry missing")
 	}
 }
 

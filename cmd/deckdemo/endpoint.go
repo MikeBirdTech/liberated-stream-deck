@@ -43,6 +43,7 @@ type remoteDemo struct {
 		Brightness int    `json:"brightness"`
 	} `json:"presentation"`
 	Key        *remoteKey        `json:"key"`
+	Keys       []remoteKey       `json:"keys"`
 	Strip      *remoteStrip      `json:"strip"`
 	Background *remoteBackground `json:"background"`
 	BootImage  *remoteBootImage  `json:"boot_image"`
@@ -51,6 +52,11 @@ type remoteDemo struct {
 	LastEvent  *struct {
 		Summary string `json:"summary"`
 	} `json:"last_event"`
+	// Generation optionally orders payloads. When present (non-zero) on a
+	// poll response and on ack state objects, a payload older than the newest
+	// one already applied is ignored, so a slow poll cannot revert a fresher
+	// acknowledgement. Absent means "always apply" (legacy behavior).
+	Generation int64 `json:"generation"`
 }
 
 // remoteKey is the server-owned presentation of one LCD key. State is opaque:
@@ -58,13 +64,60 @@ type remoteDemo struct {
 // When the optional image is present and decodable it takes precedence; the
 // label/bg/fg stay as the semantic fallback for absent or invalid images.
 type remoteKey struct {
-	Index int          `json:"index"`
-	ID    string       `json:"id"`
-	Label string       `json:"label"`
-	State string       `json:"state"`
-	BG    string       `json:"bg"`
-	FG    string       `json:"fg"`
-	Image *remoteImage `json:"image"`
+	Index  int           `json:"index"`
+	ID     string        `json:"id"`
+	Label  string        `json:"label"`
+	Sub    string        `json:"sub"`
+	State  string        `json:"state"`
+	BG     string        `json:"bg"`
+	FG     string        `json:"fg"`
+	Image  *remoteImage  `json:"image"`
+	Visual *remoteVisual `json:"visual"`
+}
+
+// remoteVisual is the optional opaque visual program for one key: a resting
+// frame, an optional timed animation, and optional press feedback that is
+// cached before any input arrives. Liberated plays it without knowing what it
+// means. Revision identifies the whole program; a key whose visual revision
+// is unchanged is never repainted, and a new revision replaces whatever the
+// key is showing (after the current visual's minimum visible time). Every
+// part is optional: a visual with only a revision behaves like a plain
+// image/label key.
+type remoteVisual struct {
+	Revision string `json:"revision"`
+	// MinVisibleMS keeps this visual on the key for at least that long once
+	// it has painted before a newer revision may replace it.
+	MinVisibleMS int `json:"min_visible_ms"`
+	// Rest overrides the key's image as the steady-state frame.
+	Rest *remoteImage `json:"rest"`
+	// Animation plays from the visual's first paint.
+	Animation *remoteSequence `json:"animation"`
+	// Press plays on key-down, holds its last frame while the key is down,
+	// and ends on key-up (never before its min_visible_ms).
+	Press *remoteSequence `json:"press"`
+}
+
+// remoteSequence is a timed list of raster frames.
+type remoteSequence struct {
+	Frames []remoteFrame `json:"frames"`
+	// LoopCount is the number of plays: absent means 1; 0 means repeat
+	// until the visual is replaced (bounded by the deck's loop-duration cap).
+	LoopCount *int `json:"loop_count"`
+	// End is "rest" (default: return to the resting frame) or "hold" (keep
+	// the last frame). Ignored for press sequences, which always hold while
+	// the key is down.
+	End string `json:"end"`
+	// MinVisibleMS applies to press sequences only (the visual's own
+	// min_visible_ms covers animations); absent selects the deck default.
+	MinVisibleMS int `json:"min_visible_ms"`
+}
+
+// remoteFrame is one animation frame: an image plus its display duration. A
+// frame may carry only a revision (no data_b64) to reference a frame already
+// supplied elsewhere in the same or an earlier payload under that revision.
+type remoteFrame struct {
+	DurationMS int `json:"duration_ms"`
+	remoteImage
 }
 
 // remoteImage is an opaque server-rendered raster frame for one key: a
@@ -120,8 +173,10 @@ type remoteBootImage struct {
 // are identical to the GET fields so the deck can repaint immediately from an
 // ack without polling.
 type remoteState struct {
-	Key   *remoteKey   `json:"key"`
-	Strip *remoteStrip `json:"strip"`
+	Key        *remoteKey   `json:"key"`
+	Keys       []remoteKey  `json:"keys"`
+	Strip      *remoteStrip `json:"strip"`
+	Generation int64        `json:"generation"`
 }
 
 type eventAck struct {
@@ -184,7 +239,9 @@ func remoteEvent(event streamdeck.Event) (map[string]any, bool) {
 	return nil, false
 }
 
-func postEventAsync(ctx context.Context, payload map[string]any, results chan<- eventPostResult) {
+// postEventAsync POSTs one raw event without blocking the caller. It is a
+// variable so tests can substitute a delayed or scripted controller.
+var postEventAsync = func(ctx context.Context, payload map[string]any, results chan<- eventPostResult) {
 	go func() {
 		ack, err := postEvent(ctx, demoHTTPClient, controllerEventURL, payload)
 		select {
