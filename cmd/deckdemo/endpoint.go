@@ -21,7 +21,16 @@ import (
 // and deckdemo runs in classic local mode without any network I/O.
 var (
 	controllerBaseURL, controllerEventURL = controllerURLs()
+	controllerStatusURL                   = statusURL(controllerBaseURL)
 )
+
+// statusURL is where the client reports what it can do with the deck.
+func statusURL(base string) string {
+	if base == "" {
+		return ""
+	}
+	return base + "/status"
+}
 
 func controllerURLs() (base, event string) {
 	base = strings.TrimRight(os.Getenv("LIBERATED_STREAM_DECK_CONTROLLER"), "/")
@@ -286,6 +295,31 @@ func postEvent(ctx context.Context, client *http.Client, url string, payload map
 		return eventAck{}, fmt.Errorf("event ack was not ok")
 	}
 	return ack, nil
+}
+
+// postDeviceStatus reports the device status to the controller. Any 2xx is
+// success; the body is not read. A controller without the endpoint answers
+// with an error status, which the caller treats as "nobody to tell".
+func postDeviceStatus(ctx context.Context, client *http.Client, url string, status deviceStatus) error {
+	body, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("encode device status: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create status request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("post status: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return fmt.Errorf("post status: status=%d", response.StatusCode)
+	}
+	return nil
 }
 
 func lastEventMessage(message string) string {

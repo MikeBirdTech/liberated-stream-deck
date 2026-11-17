@@ -764,7 +764,7 @@ func TestReconnectRestoresSteadyStateNotTransientAnimation(t *testing.T) {
 		return deck, nil
 	}
 	state := &demoState{brightness: 70}
-	if err := runDemo(ctx, state, open, fetch, time.Millisecond); err != nil {
+	if err := runDemo(ctx, state, demoEnv{open: open, fetchDemo: fetch, retryInterval: time.Millisecond}); err != nil {
 		t.Fatalf("runDemo: %v", err)
 	}
 	if opens != 2 {
@@ -812,7 +812,7 @@ func TestShutdownStopsSchedulerGoroutine(t *testing.T) {
 	}
 	state := &demoState{brightness: 70}
 	open := func() (demoDeck, error) { return deck, nil }
-	if err := runDemo(ctx, state, open, func(context.Context) (remoteDemo, error) { return demo, nil }, time.Millisecond); err != nil {
+	if err := runDemo(ctx, state, demoEnv{open: open, fetchDemo: func(context.Context) (remoteDemo, error) { return demo, nil }, retryInterval: time.Millisecond}); err != nil {
 		t.Fatalf("runDemo: %v", err)
 	}
 	if state.keyVisuals != nil {
