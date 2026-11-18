@@ -45,6 +45,8 @@ Shared features:
   bounded loops, minimum visible time, deterministic cancellation on a newer
   revision, one paced scheduler for all key writes
 - unplug/replug recovery with UI and brightness restoration
+- a deck that stops accepting writes is rested instead of hammered, and the
+  controller is told (see Stuck deck recovery)
 - clean, idempotent shutdown
 
 Stream Deck Plus:
@@ -229,7 +231,13 @@ when the variable is set at install time.
 - revision < 2, or a missing bridge section, keeps the classic rev-1 local
   demo behavior.
 - If the endpoint is unreachable, times out, or returns an unreadable body,
-  the deck falls back to the classic local render instead of going dark.
+  the deck is left showing what it already shows and the client retries about
+  once per second: the last bridge board when one was received, otherwise
+  whatever the device has (its previous frames, or the persisted standby
+  frame after a power-on). The classic local render is drawn only when no
+  controller is configured or when the controller itself answers with
+  revision < 2; it is never drawn over the deck because a configured
+  controller was slow to answer.
 
 The boot-frame channel is also recorded in the Protocol section: it is the
 one capability of this library that is not part of Elgato's public HID docs.
@@ -240,6 +248,49 @@ deck refused to draw on any other value and sat dark; that behavior is gone.)
 
 If both a Plus and a Mini are attached, the demo connects the Plus first
 (`OpenAny` preference); a targeted run for the other model uses `OpenModel`.
+
+### Device status reports
+
+When a controller is configured, `deckdemo` also tells it what the client can
+currently do with the deck: `POST <controller>/status` with a JSON body.
+
+```json
+{"device": "stuck", "detail": "restore brightness: ... I/O Timeout", "failures": 5}
+```
+
+- `connected`: a deck is open and painted. Sent once per connection; the
+  periodic GET is the heartbeat from then on.
+- `unavailable`: no supported deck could be opened. `detail` carries the open
+  error. Repeated every 10 seconds.
+- `stuck`: the deck opens but keeps rejecting writes. `detail` is the last
+  write error and `failures` the number of setups that failed in a row.
+  Repeated every 10 seconds while the deck rests.
+
+Any 2xx answer is accepted and the body is ignored. Reporting is additive and
+best effort: a controller without the endpoint is logged once and retried on
+the heartbeat, and a failed report never affects the deck. A controller should
+treat an `unavailable` or `stuck` report as current only while it keeps
+arriving.
+
+### Stuck deck recovery
+
+A deck can stop accepting writes while it still enumerates and opens; every
+`IOHIDDeviceSetReport` then fails (see the write-pacing notes in the Protocol
+section; the same state has been seen after the host resumed from sleep).
+Logs from a deck in daily use show two shapes: brief failures that clear
+within a few one-second retries, and stuck episodes that outlasted hours of
+retries and ended only when the deck was unplugged and replugged.
+
+`deckdemo` therefore retries a failed setup once per second only five times in
+a row. After that it treats the deck as stuck: it stops opening and writing to
+the device, reports `stuck` to the controller, and rests for 3 minutes before
+a single probe. Later rests in the same episode last 6, 12, and then 15
+minutes. While resting it watches USB enumeration only, so unplugging and
+replugging the deck (or power-cycling its hub port) ends the rest at once and
+the deck is restored as on any reconnect.
+
+Whether resting alone lets a stuck deck recover is not established; the
+unplug/replug is the recovery known to work.
 
 ## Install (macOS launchd agent)
 
@@ -258,8 +309,8 @@ The agent's launchd label is `com.mikebirdtech.liberated-stream-deck`. It runs
 
 Note: `deckdemo` is remote-commanded by a local companion controller over
 HTTP; revision 2 runs in bridge mode (see the remote presentation notes in
-the demo section). Any endpoint failure falls back to classic local rendering, so the
-deck is never left dark.
+the demo section). While the controller is unreachable the deck keeps showing
+what it already shows; the local demo is not drawn over it.
 
 ## Elgato application conflict
 

@@ -182,32 +182,44 @@ func run() error {
 
 	state := demoState{brightness: 70}
 	state.stripOutput.configure(touchStripMinimumInterval(), defaultTouchStripFailureDelay)
-	var fetchDemo fetchDemoFunc
+	env := demoEnv{
+		open:          func() (demoDeck, error) { return streamdeck.OpenAny() },
+		retryInterval: reconnectInterval,
+		identity:      connectedDeckIdentity,
+	}
 	if controllerBaseURL != "" {
-		fetchDemo = func(ctx context.Context) (remoteDemo, error) {
+		env.fetchDemo = func(ctx context.Context) (remoteDemo, error) {
 			return fetchRemoteDemo(ctx, demoHTTPClient, controllerBaseURL)
 		}
+		env.report = func(ctx context.Context, status deviceStatus) error {
+			return postDeviceStatus(ctx, demoHTTPClient, controllerStatusURL, status)
+		}
 	}
-	return runDemo(
-		ctx,
-		&state,
-		func() (demoDeck, error) { return streamdeck.OpenAny() },
-		fetchDemo,
-		reconnectInterval,
-	)
+	return runDemo(ctx, &state, env)
 }
 
-func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo fetchDemoFunc, retryInterval time.Duration) error {
+func runDemo(ctx context.Context, state *demoState, env demoEnv) error {
+	env = env.withDefaults()
+	retryInterval := env.retryInterval
 	defer state.closeVisuals()
+
+	status := statusReporter{report: env.report, heartbeat: env.heartbeat}
+	// setupFailures counts device setups that failed in a row; rests counts
+	// the rests already taken in the current stuck episode.
+	setupFailures, rests := 0, 0
+	awaitingController := false
 	for {
 		if ctx.Err() != nil {
 			log.Print("device shutdown reason=interrupt")
 			return nil
 		}
 
-		deck, err := open()
+		deck, err := env.open()
 		if err != nil {
+			// No deck to be stuck: whatever comes back is a fresh connection.
+			setupFailures, rests = 0, 0
 			log.Printf("device unavailable retry=%s error=%q", retryInterval, err)
+			status.update(ctx, deviceStatus{Device: deviceUnavailable, Detail: err.Error()})
 			if !waitForReconnect(ctx, retryInterval) {
 				log.Print("device shutdown reason=interrupt")
 				return nil
@@ -218,27 +230,41 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 		info, setupErr := deck.Info()
 		var remote remoteDemo
 		if setupErr == nil {
-			if fetchDemo == nil {
+			if env.fetchDemo == nil {
 				// No remote controller configured: revision-0 state keeps the
 				// classic rev-1 local render without any network I/O.
 				applyRemoteDemo(state, remoteDemo{})
 			} else {
 				var fetchErr error
-				remote, fetchErr = fetchDemo(ctx)
-				if fetchErr != nil {
-					// A dead endpoint must never strand a newly started deck dark.
-					// Render locally until the connection-local poller recovers the
-					// controller. If bridge state already exists, retain it instead.
-					if !state.bridge {
-						applyRemoteDemo(state, remoteDemo{})
+				remote, fetchErr = env.fetchDemo(ctx)
+				switch {
+				case fetchErr == nil:
+					if awaitingController {
+						log.Print("demo endpoint answered; connecting")
+						awaitingController = false
 					}
-					mode := "rev1-local"
-					if state.bridge {
-						mode = "bridge-retained"
-					}
-					log.Printf("demo endpoint unavailable mode=%s error=%q", mode, fetchErr)
-				} else {
 					applyRemoteDemo(state, remote)
+				case state.bridge:
+					// The controller's last board is still the right thing to show.
+					log.Printf("demo endpoint unavailable mode=bridge-retained error=%q", fetchErr)
+				default:
+					// A configured controller owns the deck. Until it answers
+					// there is nothing of its to paint, so the deck keeps what
+					// it already shows (its last board, or the persisted
+					// standby frame after a power-on) rather than the local
+					// demo. Logged once per wait, not once per retry.
+					if !awaitingController {
+						log.Printf("demo endpoint unavailable mode=waiting retry=%s error=%q", retryInterval, fetchErr)
+						awaitingController = true
+					}
+					if closeErr := deck.Close(); closeErr != nil {
+						log.Printf("device close error=%q", closeErr)
+					}
+					if !waitForReconnect(ctx, retryInterval) {
+						log.Print("device shutdown reason=interrupt")
+						return nil
+					}
+					continue
 				}
 			}
 		}
@@ -254,10 +280,23 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 			}
 		}
 		if setupErr != nil {
+			setupFailures++
 			log.Printf("device setup failed retry=%s error=%q", retryInterval, setupErr)
 			state.visuals().Detach()
 			if closeErr := deck.Close(); closeErr != nil {
 				log.Printf("device close error=%q", closeErr)
+			}
+			if setupFailures >= env.stuckAfter {
+				switch restStuckDeck(ctx, env, &status, setupFailures, rests, setupErr) {
+				case restInterrupted:
+					log.Print("device shutdown reason=interrupt")
+					return nil
+				case restDeckChanged:
+					setupFailures, rests = 0, 0
+				case restElapsed:
+					rests++
+				}
+				continue
 			}
 			if !waitForReconnect(ctx, retryInterval) {
 				log.Print("device shutdown reason=interrupt")
@@ -265,6 +304,8 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 			}
 			continue
 		}
+		setupFailures, rests = 0, 0
+		status.update(ctx, deviceStatus{Device: deviceConnected})
 
 		mode := "rev1"
 		if state.bridge {
@@ -284,7 +325,7 @@ func runDemo(ctx context.Context, state *demoState, open openDeckFunc, fetchDemo
 			log.Printf("output restored keys=1-%d key-size=%dx%d brightness=%d", info.Model.KeyCount(), width, height, state.brightness)
 		}
 
-		connectionErr := runConnected(ctx, deck, state, info.Model, fetchDemo)
+		connectionErr := runConnected(ctx, deck, state, info.Model, env.fetchDemo)
 		// Stop the scheduler's writes before anything else touches the keys
 		// or the handle is closed; programs survive for the next connection.
 		state.visuals().Detach()

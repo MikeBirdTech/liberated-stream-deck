@@ -131,7 +131,7 @@ func TestRunDemoReconnectsAndRestoresState(t *testing.T) {
 		mode:        1,
 	}
 
-	if err := runDemo(ctx, state, open, testRemoteDemo(state.brightness), time.Millisecond); err != nil {
+	if err := runDemo(ctx, state, demoEnv{open: open, fetchDemo: testRemoteDemo(state.brightness), retryInterval: time.Millisecond}); err != nil {
 		t.Fatalf("runDemo: %v", err)
 	}
 	if openCalls != 2 {
@@ -164,7 +164,7 @@ func TestRunDemoCancellationInterruptsReconnectWait(t *testing.T) {
 	}
 
 	go func() {
-		done <- runDemo(ctx, &demoState{brightness: 70}, open, testRemoteDemo(70), time.Hour)
+		done <- runDemo(ctx, &demoState{brightness: 70}, demoEnv{open: open, fetchDemo: testRemoteDemo(70), retryInterval: time.Hour})
 	}()
 
 	select {
@@ -200,6 +200,7 @@ type fakeDemoDeck struct {
 	mu              sync.Mutex
 	reads           []fakeRead
 	brightnessCalls []int
+	brightnessErr   error
 	keyImages       map[int]image.Image
 	keyImageCalls   int
 	keyImageLog     []fakeKeyWrite
@@ -247,6 +248,9 @@ func (d *fakeDemoDeck) ReadEvents(time.Duration) (streamdeck.InputRead, error) {
 func (d *fakeDemoDeck) SetBrightness(percent int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.brightnessErr != nil {
+		return d.brightnessErr
+	}
 	d.brightnessCalls = append(d.brightnessCalls, percent)
 	return nil
 }
@@ -535,32 +539,70 @@ func TestBridgePollAdoptsAndRepaintsServerState(t *testing.T) {
 	}
 }
 
-func TestRunDemoRendersLocallyWhenEndpointUnavailable(t *testing.T) {
+func TestRunDemoLeavesDeckUntouchedUntilControllerAnswers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	silentA, silentB, answered := newFakeDemoDeck(), newFakeDemoDeck(), newFakeDemoDeck()
+	answered.onStripImage = cancel
+	decks := []*fakeDemoDeck{silentA, silentB, answered}
+	opens := 0
+	open := func() (demoDeck, error) {
+		if opens >= len(decks) {
+			return nil, errors.New("unexpected extra open")
+		}
+		deck := decks[opens]
+		opens++
+		return deck, nil
+	}
+	demo := remoteDemo{Revision: 3, PollMS: 5000}
+	demo.Presentation.Brightness = 65
+	demo.Key = &remoteKey{Index: 0, Label: "Volume", State: "ready", BG: "#55764A", FG: "#F6F5EE"}
+	demo.Strip = &remoteStrip{Page: 0, Pages: 1, Title: "Audio", Lines: []string{"System volume 42%"}}
+	fetches := 0
+	fetch := func(context.Context) (remoteDemo, error) {
+		fetches++
+		if fetches <= 2 {
+			return remoteDemo{}, errors.New("endpoint down")
+		}
+		return demo, nil
+	}
+
+	state := &demoState{brightness: 50}
+	if err := runDemo(ctx, state, demoEnv{open: open, fetchDemo: fetch, retryInterval: time.Millisecond}); err != nil {
+		t.Fatalf("runDemo: %v", err)
+	}
+	for index, deck := range []*fakeDemoDeck{silentA, silentB} {
+		if len(deck.brightnessCalls) != 0 || deck.keyWrites() != 0 || deck.stripCount() != 0 {
+			t.Fatalf("deck %d was written to while the controller was silent: brightness=%v keys=%d strips=%d",
+				index, deck.brightnessCalls, deck.keyWrites(), deck.stripCount())
+		}
+		if deck.closeCalls != 1 {
+			t.Fatalf("deck %d close calls = %d, want 1", index, deck.closeCalls)
+		}
+	}
+	if !state.bridge {
+		t.Fatal("controller's answer was not adopted")
+	}
+	if len(answered.brightnessCalls) == 0 || answered.brightnessCalls[0] != 65 || answered.stripCount() == 0 {
+		t.Fatalf("deck was not painted once the controller answered: brightness=%v strips=%d", answered.brightnessCalls, answered.stripCount())
+	}
+}
+
+func TestRunDemoWithoutControllerRendersLocally(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	deck := newFakeDemoDeck()
-	deck.reads = []fakeRead{{err: errors.New("USB removed")}}
-	openCalls := 0
-	open := func() (demoDeck, error) {
-		openCalls++
-		if openCalls == 1 {
-			return deck, nil
-		}
-		cancel()
-		return nil, errors.New("end of test")
-	}
-	fetch := func(context.Context) (remoteDemo, error) {
-		return remoteDemo{}, errors.New("endpoint down")
-	}
-
-	if err := runDemo(ctx, &demoState{brightness: 50}, open, fetch, time.Millisecond); err != nil {
+	deck.onStripImage = cancel
+	open := func() (demoDeck, error) { return deck, nil }
+	if err := runDemo(ctx, &demoState{brightness: 50}, demoEnv{open: open, retryInterval: time.Millisecond}); err != nil {
 		t.Fatalf("runDemo: %v", err)
 	}
-	if len(deck.keyImages) != streamdeck.KeyCount {
-		t.Fatalf("no local render on endpoint failure: keys = %d, want %d", len(deck.keyImages), streamdeck.KeyCount)
+	if len(deck.keyImages) != streamdeck.KeyCount || deck.stripCount() != 1 {
+		t.Fatalf("local demo keys=%d strips=%d, want %d and 1", len(deck.keyImages), deck.stripCount(), streamdeck.KeyCount)
 	}
-	if deck.brightnessCalls[0] != 50 {
+	if len(deck.brightnessCalls) != 1 || deck.brightnessCalls[0] != 50 {
 		t.Fatalf("brightness = %v, want [50]", deck.brightnessCalls)
 	}
 }
